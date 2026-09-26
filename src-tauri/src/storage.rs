@@ -1,4 +1,4 @@
-use crate::{model::Config, tone::Ramp};
+use crate::{hardware::Records, model::Config, tone::Ramp};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -52,6 +52,39 @@ impl Storage {
     }
     pub fn journal(&self, recovery: &Recovery) -> Result<(), String> {
         atomic_json(&self.root.join("recovery.json"), recovery)
+    }
+    pub fn hardware_journal(&self, records: &Records) -> Result<(), String> {
+        atomic_json(&self.root.join("hardware-recovery.json"), records)
+    }
+    pub fn split_hardware_recovery(&self) -> Result<Records, String> {
+        let path = self.root.join("hardware-recovery.json");
+        let mut records: Records = if path.exists() {
+            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?
+        } else {
+            Records::default()
+        };
+        if let Some(mut legacy) = self.recovery()? {
+            if !legacy.hardware.is_empty() {
+                let values = records
+                    .displays
+                    .entry(legacy.display_id.clone())
+                    .or_default();
+                for (key, value) in &legacy.hardware {
+                    values.entry(key.clone()).or_insert(*value);
+                }
+                // Persist hardware FIRST. A crash between these writes can leave
+                // duplicate originals, but can never erase the only copy.
+                self.hardware_journal(&records)?;
+                legacy.hardware.clear();
+                if legacy.gamma_changed {
+                    self.journal(&legacy)?;
+                } else {
+                    self.clear_recovery()?;
+                }
+            }
+        }
+        Ok(records)
     }
     pub fn recovery(&self) -> Result<Option<Recovery>, String> {
         let path = self.root.join("recovery.json");
@@ -126,6 +159,35 @@ pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn migrates_legacy_hardware_before_gamma_and_keeps_journals_independent() {
+        let dir =
+            std::env::temp_dir().join(format!("lumashift-migration-test-{}", std::process::id()));
+        let store = Storage::new(dir.clone()).unwrap();
+        let mut original = Recovery {
+            version: 1,
+            display_id: "A".into(),
+            device: "A".into(),
+            gamma: crate::tone::identity().into_iter().flatten().collect(),
+            gamma_changed: true,
+            hardware: BTreeMap::from([("redGain".into(), 50)]),
+        };
+        store.journal(&original).unwrap();
+        let hardware = store.split_hardware_recovery().unwrap();
+        assert_eq!(hardware.displays["A"]["redGain"], 50);
+        assert!(store.recovery().unwrap().unwrap().hardware.is_empty());
+        // Simulate interruption between the hardware and Gamma migration writes.
+        store.journal(&original).unwrap();
+        assert_eq!(store.split_hardware_recovery().unwrap(), hardware);
+        store.clear_recovery().unwrap();
+        original.hardware.clear();
+        original.display_id = "B".into();
+        store.journal(&original).unwrap();
+        assert_eq!(store.split_hardware_recovery().unwrap(), hardware);
+        store.clear_recovery().unwrap();
+        std::fs::remove_file(dir.join("hardware-recovery.json")).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
     #[test]
     fn journal_requires_a_complete_ramp_before_recovery() {
         let record = Recovery {

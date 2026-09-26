@@ -15,7 +15,7 @@ function previewState(): Snapshot {
   demo = { revision: 0, config, draft: structuredClone(config.presets.find(p => p.id === config.activePreset) ?? config.presets[0]),
     displays: [{ id: 'preview-display', name: '演示显示器 · Demo display', device: 'Preview only', primary: true, hdr: false, gammaAvailable: true,
       features: ['brightness', 'contrast', 'saturation', 'sharpness', 'redGain', 'greenGain', 'blueGain'].map((key, i) => ({ key, status: i < 4 ? 'available' : 'unsupported', value: i < 4 ? [70, 50, 55, 50][i] : null, max: i < 4 ? 100 : 0, detail: '' })) }],
-    enabled: false, comparing: false, busy: false, error: null, warnings: [], shortcutErrors: [], recoveryPending: false, reason: 'ready' };
+    enabled: false, comparing: false, busy: false, error: null, warnings: [], shortcutErrors: [], recoveryPending: false, gammaRecoveryPending: false, hardwareRecoveryPending: false, reason: 'ready' };
   return demo;
 }
 function validatePreview(config: Config) {
@@ -25,6 +25,7 @@ function validatePreview(config: Config) {
   for (const p of config.presets) {
     if (typeof p.id !== 'string' || !p.id || typeof p.name !== 'string' || !p.name.trim() || [...p.name].length > 40 || typeof p.shortcut !== 'string') throw new Error('Invalid preset');
     const ranges = { gamma: [.6, 2.2], shadows: [0, 60], contrast: [-40, 40], highlights: [-40, 40], exposure: [-.5, .5], temperature: [-50, 50], blackPoint: [0, 8] };
+    if (p.hardwareEnabled !== undefined && typeof p.hardwareEnabled !== 'boolean') throw new Error('Invalid hardware switch');
     if (!p.tone || !p.hardware || Array.isArray(p.hardware)) throw new Error('Missing preset parameters');
     for (const [key, [min, max]] of Object.entries(ranges)) { const value = p.tone[key as keyof typeof ranges]; if (!Number.isFinite(value) || value < min || value > max) throw new Error(`Invalid ${key}`); }
     for (const [key, value] of Object.entries(p.hardware)) if (!['brightness', 'contrast', 'saturation', 'sharpness', 'redGain', 'greenGain', 'blueGain'].includes(key) || !Number.isInteger(value) || value < 0 || value > 100) throw new Error('Invalid hardware parameter');
@@ -75,7 +76,7 @@ export async function command(operation: Operation): Promise<Snapshot> {
         else { if (parsed.version !== 1 || !Array.isArray(parsed.presets)) throw new Error('Invalid presets'); s.config.presets.push(...parsed.presets.map((p: Snapshot['draft']) => ({ ...p, id: crypto.randomUUID(), shortcut: '' }))); validatePreview(s.config); }
         s.config.selectedDisplay = 'preview-display'; draftCache.clear(); s.enabled = false; s.comparing = false; s.reason = 'profile'; break;
       }
-      case 'recover': s.recoveryPending = false; s.enabled = false; break;
+      case 'recover': s.recoveryPending = false; s.gammaRecoveryPending = false; s.hardwareRecoveryPending = false; s.enabled = false; break;
       case 'quit': case 'forceQuit': s.enabled = false; break;
     }
     validatePreview(s.config);

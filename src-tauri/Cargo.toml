@@ -1,6 +1,6 @@
 [package]
 name = "lumashift"
-version = "0.1.0"
+version = "0.1.4"
 edition = "2021"
 rust-version = "1.88"
 description = "Display tone and monitor controls for Windows"
@@ -21,4 +21,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = "0.38.2"
 windows = { version = "0.61", features = ["Win32_Devices_Display", "Win32_Graphics_Gdi", "Win32_UI_ColorSystem", "Win32_Foundation", "Win32_Storage_FileSystem"] }

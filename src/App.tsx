@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Monitor, Crosshair, File, Keyboard, Settings as SettingsIcon, Plus, Sun, Moon, Laptop, Contrast, Palette, RotateCcw, ChevronRight, Check, X, Minus, Square, Pencil, Download, Upload, RefreshCw, FolderOpen, Copy, Power, Trash2, SlidersHorizontal, AlertTriangle, LoaderCircle, Eye, Info } from 'lucide-react';
 import * as api from './bridge';
+import { reportUi, describeError } from './diagnostics';
+import { version as appVersion } from '../package.json';
 import { curve, neutralTone, shortcutFromEvent, shortcutText, type Config, type Feature, type Operation, type Profile, type Settings, type Snapshot, type Tone } from './types';
 
 type Page = 'adjust' | 'shortcuts' | 'settings';
@@ -74,12 +76,22 @@ export default function App() {
   useEffect(() => {
     let active = true; let unsubscribe: (() => void) | undefined;
     void (async () => {
+      reportUi('startup: subscribing to backend state');
       const cleanup = await api.subscribe(s => { if (active) applySnapshot(s); });
       if (!active) { cleanup(); return; } unsubscribe = cleanup;
+      reportUi('startup: requesting initial state');
       const state = await api.getState(); if (active) applySnapshot(state);
-    })().catch(error => { if (active) setBootError(String(error)); });
+      if (active) reportUi(`startup: state received, revision=${state.revision}, reason=${state.reason}`);
+    })().catch(error => { reportUi(`startup failed: ${describeError(error)}`); if (active) setBootError(String(error)); });
     return () => { active = false; unsubscribe?.(); };
   }, [applySnapshot]);
+  const reportedReady = useRef(false);
+  useEffect(() => {
+    if (snapshot && draft && !snapshot.busy && !reportedReady.current) {
+      reportedReady.current = true;
+      reportUi(`interface mounted; displays=${snapshot.displays.length}, preset=${draft.id}`);
+    }
+  }, [snapshot, draft]);
   useEffect(() => { const mq = window.matchMedia('(prefers-color-scheme: dark)'); const change = () => setSystemDark(mq.matches); mq.addEventListener('change', change); return () => mq.removeEventListener('change', change); }, []);
   useEffect(() => {
     const theme = snapshot?.config.settings.theme ?? 'system';
@@ -124,27 +136,27 @@ export default function App() {
 
   const device = snapshot?.displays.find(d => d.id === snapshot.config.selectedDisplay);
   const saved = snapshot?.config.presets.find(p => p.id === draft?.id);
-  const dirty = !!draft && !!saved && (JSON.stringify(draft.tone) !== JSON.stringify(saved.tone) || JSON.stringify(draft.hardware) !== JSON.stringify(saved.hardware));
+  const dirty = !!draft && !!saved && (JSON.stringify(draft.tone) !== JSON.stringify(saved.tone) || JSON.stringify(draft.hardware) !== JSON.stringify(saved.hardware) || (draft.hardwareEnabled !== false) !== (saved.hardwareEnabled !== false));
   const editTone = (key: keyof Tone, value: number) => { if (draft) edit({ ...draft, tone: { ...draft.tone, [key]: value } }); };
   const editHardware = (key: string, value?: number) => { if (!draft) return; const hardware = { ...draft.hardware }; if (value === undefined) delete hardware[key]; else hardware[key] = value; edit({ ...draft, hardware }); };
   const statusText = (feature: Feature) => feature.status === 'unsupported' ? t('未提供此控制', 'Not supported') : feature.status === 'unavailable' ? t('当前不可用', 'Currently unavailable') : t('未能读取', 'Could not read');
   const hardwareRow = (feature: Feature) => {
-    const label = hardwareLabels[feature.key]?.[en ? 1 : 0] ?? feature.key; const supported = feature.status === 'available'; const included = !!draft && feature.key in draft.hardware;
+    const label = hardwareLabels[feature.key]?.[en ? 1 : 0] ?? feature.key; const supported = feature.status === 'available'; const hardwareEnabled = draft?.hardwareEnabled !== false; const included = !!draft && feature.key in draft.hardware;
     const Icon = feature.key === 'brightness' ? Sun : feature.key === 'contrast' ? Contrast : feature.key === 'saturation' ? Palette : SlidersHorizontal;
     return <div className={`hardware-row ${!supported ? 'unavailable' : ''}`} key={feature.key}>
       <div className="hardware-label"><Icon size={21} className={feature.key === 'saturation' ? 'color-icon' : ''} /><span>{label}</span>
-        {supported ? <label className={`include-control ${included ? 'included' : ''}`} title={t('此参数是否随预设一起应用', 'Include this parameter in the preset')}><input type="checkbox" aria-label={t(`将${label}加入预设`, `Include ${label} in preset`)} checked={included} onChange={e => editHardware(feature.key, e.target.checked ? feature.value ?? 50 : undefined)} /><span>{included ? t('随预设', 'Included') : t('不改变', 'Unchanged')}</span></label> : <span className="unavailable-label" title={feature.detail}>{statusText(feature)}</span>}
+        {supported ? <label className={`include-control ${included ? 'included' : ''}`} title={t('此参数是否随预设一起应用', 'Include this parameter in the preset')}><input type="checkbox" aria-label={t(`将${label}加入预设`, `Include ${label} in preset`)} checked={included} disabled={!hardwareEnabled} onChange={e => editHardware(feature.key, e.target.checked ? feature.value ?? 50 : undefined)} /><span>{included ? t('随预设', 'Included') : t('不改变', 'Unchanged')}</span></label> : <span className="unavailable-label" title={feature.detail}>{statusText(feature)}</span>}
       </div>
-      {supported && draft && <Range label={label} value={draft.hardware[feature.key] ?? feature.value ?? 50} onChange={value => editHardware(feature.key, value)} />}
+      {supported && draft && <Range label={label} disabled={!hardwareEnabled} value={draft.hardware[feature.key] ?? feature.value ?? 50} onChange={value => editHardware(feature.key, value)} />}
     </div>;
   };
   const exportConfig = async (scope: 'all' | 'presets') => { try { if (await api.exportFile(scope)) setNotice(t('已导出保存的配置', 'Saved configuration exported')); } catch (error) { setNotice(String(error)); } };
   const requestImport = (scope: string) => { importScope.current = scope; fileInput.current?.click(); };
-  const copyDiagnostics = async () => { try { await navigator.clipboard.writeText(JSON.stringify({ app: 'LumaShift', version: '0.1.0', mode: api.desktop ? 'desktop' : 'layout-preview', displays: snapshot?.displays, error: snapshot?.error, warnings: snapshot?.warnings, shortcutErrors: snapshot?.shortcutErrors }, null, 2)); setNotice(t('诊断信息已复制', 'Diagnostics copied')); } catch (error) { setNotice(String(error)); } };
+  const copyDiagnostics = async () => { try { await navigator.clipboard.writeText(JSON.stringify({ app: 'LumaShift', version: appVersion, mode: api.desktop ? 'desktop' : 'layout-preview', displays: snapshot?.displays, error: snapshot?.error, warnings: snapshot?.warnings, shortcutErrors: snapshot?.shortcutErrors }, null, 2)); setNotice(t('诊断信息已复制', 'Diagnostics copied')); } catch (error) { setNotice(String(error)); } };
   const settingRow = (title: string, description: string, control: ReactNode) => <div className="setting-row"><div><strong>{title}</strong><p>{description}</p></div>{control}</div>;
 
   return <div className="app-shell">
-    <header className="titlebar"><div className="titlebar-drag" onMouseDown={e => { if (e.button === 0) void api.windowAction('drag'); }} onDoubleClick={() => void api.windowAction('maximize')}><img src="/lumashift.svg" alt="" /><span>LumaShift</span><span className="version-tag">0.1</span></div>
+    <header className="titlebar"><div className="titlebar-drag" onMouseDown={e => { if (e.button === 0) void api.windowAction('drag'); }} onDoubleClick={() => void api.windowAction('maximize')}><img src="/lumashift.svg" alt="" /><span>LumaShift</span><span className="version-tag">{appVersion}</span></div>
       {!api.desktop && <span className="preview-badge">{t('布局预览 · 不修改显示器', 'Layout preview · no display changes')}</span>}
       <div className="window-controls"><button aria-label={t('最小化', 'Minimize')} disabled={!api.desktop} onClick={() => void api.windowAction('minimize')}><Minus size={15} /></button><button aria-label={t('最大化', 'Maximize')} disabled={!api.desktop} onClick={() => void api.windowAction('maximize')}><Square size={13} /></button><button className="close-window" aria-label={t('关闭到托盘', 'Close to tray')} title={t('关闭到托盘，效果继续保持', 'Close to tray and keep effects active')} disabled={!api.desktop} onClick={() => void api.windowAction('close')}><X size={17} /></button></div>
     </header>
@@ -155,30 +167,37 @@ export default function App() {
           <ShortcutField compact en={en} value={preset.shortcut} label={t(`${preset.name} 快捷键`, `${preset.name} shortcut`)} onChange={value => void setShortcut(preset.id, value)} onError={setNotice} />
         </div>)}</div>
         <button className="new-preset" onClick={() => setModal({ type: 'create', value: t('自定义预设', 'Custom preset') })}><Plus size={20} />{t('新建预设', 'New preset')}</button>
-        <div className="sidebar-bottom"><button className={`nav-item ${page === 'shortcuts' ? 'active' : ''}`} onClick={() => setPage('shortcuts')}><Keyboard size={20} />{t('快捷键', 'Shortcuts')}</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => setPage('settings')}><SettingsIcon size={20} />{t('设置', 'Settings')}</button><div className="sidebar-foot"><span className={`status-dot ${snapshot.enabled && !snapshot.comparing ? 'on' : ''}`} />{snapshot.enabled && !snapshot.comparing ? t('效果运行中', 'Effects active') : t('原始画面', 'Original display')}</div></div>
+        <div className="sidebar-bottom"><button className={`nav-item ${page === 'shortcuts' ? 'active' : ''}`} onClick={() => setPage('shortcuts')}><Keyboard size={20} />{t('快捷键', 'Shortcuts')}</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => setPage('settings')}><SettingsIcon size={20} />{t('设置', 'Settings')}</button><div className="sidebar-foot"><span className={`status-dot ${snapshot.enabled && !snapshot.comparing ? 'on' : ''}`} />{snapshot.enabled && !snapshot.comparing ? t('效果运行中', 'Effects active') : t('Gamma 未启用', 'Gamma inactive')}</div></div>
       </aside>
-      <main className="main">
-        {snapshot.recoveryPending && <div className="banner recovery"><AlertTriangle size={19} /><div><strong>{t('上次显示设置尚未恢复', 'A previous session needs recovery')}</strong><p>{t('原始设置已保存。请连接原显示器后恢复，再开始新的调节。', 'Original settings are saved. Reconnect the original monitor, then restore before applying new changes.')}</p></div><button onClick={() => void act({ type: 'recover' })}>{t('恢复原设置', 'Restore originals')}</button><button className="text-button" onClick={() => void act({ type: 'forceQuit' })}>{t('保留记录并退出', 'Keep record & exit')}</button></div>}
+      <main className={`main ${page === 'adjust' ? 'main-adjust' : 'main-secondary'}`}>
+        <div className="notifications">
+        {snapshot.recoveryPending && <div className="banner recovery"><AlertTriangle size={19} /><div><strong>{snapshot.gammaRecoveryPending ? t('上次 Gamma 设置等待恢复', 'Previous Gamma settings need recovery') : t('部分显示器控制已暂停，Gamma 可继续使用', 'Some monitor controls are paused; Gamma is still available')}</strong><p>{snapshot.gammaRecoveryPending ? t('开启效果时会先单独恢复 Gamma。硬件参数的恢复记录独立保留。', 'Enabling effects first restores Gamma independently. Hardware originals are kept separately.') : t('失败的硬件项已停用，原值仍有记录。可继续调整 Gamma、切换预设；连接并唤醒显示器后可重试硬件恢复。', 'Failed controls are disabled and originals retained. Continue adjusting Gamma or switching presets; reconnect and wake the monitor to retry hardware recovery.')}</p></div><button disabled={snapshot.busy} onClick={() => void act({ type: 'recover' })}>{snapshot.busy ? t('处理中…', 'Working…') : t('重新检测并恢复', 'Reconnect & restore')}</button><button className="text-button" disabled={snapshot.busy} onClick={() => void act({ type: 'forceQuit' })}>{t('保留记录并退出', 'Keep record & exit')}</button></div>}
         {snapshot.error && <div className="banner error" role="alert"><AlertTriangle size={18} /><span>{snapshot.error}</span></div>}
         {page !== 'shortcuts' && !!snapshot.shortcutErrors.length && <div className="banner warning"><Keyboard size={18} /><span>{t('部分快捷键无法注册，请到快捷键页修改：', 'Some shortcuts could not be registered. Edit them in Shortcuts: ')}{snapshot.shortcutErrors.join(' · ')}</span></div>}
         {!!snapshot.warnings.length && <div className="banner warning"><Info size={18} /><span>{snapshot.warnings.join(' · ')}</span></div>}
+        </div>
         {page === 'adjust' && <>
           <div className="toolbar"><div className="display-select"><Monitor size={21} /><select aria-label={t('目标显示器', 'Target display')} value={snapshot.config.selectedDisplay ?? ''} disabled={!snapshot.displays.length} onChange={e => void act({ type: 'selectDisplay', payload: e.target.value })}>{!snapshot.displays.length && <option value="">{snapshot.busy ? t('正在检测显示器…', 'Detecting displays…') : t('没有检测到显示器', 'No displays detected')}</option>}{snapshot.displays.map((d, i) => <option key={d.id} value={d.id}>{i + 1} · {d.name}{d.primary ? t(' · 主显示器', ' · Primary') : ''}</option>)}</select></div>
-            <div className="master-switch"><Toggle checked={snapshot.enabled} label={t('启用效果', 'Enable effects')} disabled={!device || snapshot.recoveryPending} onChange={() => void act(s => ({ type: 'setEnabled', payload: !s.enabled }))} /><span>{snapshot.enabled ? t('效果已开启', 'Effects enabled') : t('效果已关闭', 'Effects disabled')}</span></div>
+            <div className="master-switch"><Toggle checked={snapshot.enabled} label={t('启用效果', 'Enable effects')} disabled={!device} onChange={() => void act(s => ({ type: 'setEnabled', payload: !s.enabled }))} /><span>{snapshot.enabled ? t('效果已开启', 'Effects enabled') : t('效果已关闭', 'Effects disabled')}</span></div>
           </div>
           <div className="page-heading"><div className="preset-heading"><h1>{draft.name}</h1><button className="icon-button muted" title={t('重命名预设', 'Rename preset')} aria-label={t('重命名预设', 'Rename preset')} onClick={() => setModal({ type: 'rename', value: draft.name })}><Pencil size={16} /></button><span className={`save-status ${dirty ? 'unsaved' : ''}`}>{dirty ? <><span className="dirty-dot" />{t('未保存修改', 'Unsaved changes')}</> : <><Check size={13} />{t('已保存', 'Saved')}</>}</span></div><button className="primary save-button" disabled={!dirty || snapshot.busy} onClick={() => void act({ type: 'savePreset', payload: draft.name })}><Check size={17} />{t('保存预设', 'Save preset')}</button></div>
           {!device && !snapshot.busy ? <div className="empty-device"><Monitor size={42} /><h2>{t('连接一台显示器开始调节', 'Connect a display to get started')}</h2><button onClick={() => void act({ type: 'refresh' })}><RefreshCw size={16} />{t('重新检测', 'Detect again')}</button></div> : <div className="control-grid">
             <section className="panel gamma-panel"><div className="panel-heading"><div><h2>{t('画面调节', 'Picture')}</h2><p>{t('Gamma 曲线', 'Gamma curve')}</p></div><span className="small-badge">SDR</span></div>
+              <div className="panel-body gamma-body">
               <CurveGraph tone={draft.tone} label={t('当前参数的 Gamma 曲线示意', 'Gamma curve for the current parameters')} />
               <div className="tone-sliders">{toneFields.slice(0, 3).map(field => <div className="tone-row" key={field.key}><label>{field.label[en ? 1 : 0]}</label><Range label={field.label[en ? 1 : 0]} value={draft.tone[field.key]} min={field.min} max={field.max} step={field.step} disabled={!device?.gammaAvailable} onChange={value => editTone(field.key, value)} /></div>)}</div>
               {device && !device.gammaAvailable && <p className="inline-note"><Info size={14} />{device.hdr ? t('HDR / 高级色彩模式下暂停 Gamma 调节', 'Gamma paused in HDR / advanced color mode') : t('当前显示模式或驱动无法提供 Gamma 调节', 'Gamma is unavailable in this display mode or driver')}</p>}
               {advanced && <div className="advanced-controls">{toneFields.slice(3).map(field => <div className="tone-row" key={field.key}><label>{field.label[en ? 1 : 0]}</label><Range label={field.label[en ? 1 : 0]} value={draft.tone[field.key]} min={field.min} max={field.max} step={field.step} disabled={!device?.gammaAvailable} onChange={value => editTone(field.key, value)} /></div>)}</div>}
+              </div>
               <div className="panel-actions"><button className="text-button" onClick={() => edit({ ...draft, tone: { ...neutralTone } })}><RotateCcw size={16} />{t('重置画面参数', 'Reset picture')}</button><button className={`text-button disclosure ${advanced ? 'expanded' : ''}`} aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>{t('高级调节', 'Advanced')}<ChevronRight size={17} /></button></div>
             </section>
-            <section className="panel hardware-panel"><div className="panel-heading"><div><h2>{t('显示器', 'Monitor')}</h2><p>{t('调整显示器自身参数', 'Controls on your physical monitor')}</p></div><Sun size={20} className="muted" /></div>
+            <section className="panel hardware-panel"><div className="panel-heading"><div><h2>{t('显示器', 'Monitor')}</h2><p>{t('调整显示器自身参数', 'Controls on your physical monitor')}</p></div><Toggle label={t('此预设使用显示器参数', 'Use monitor controls in this preset')} checked={draft.hardwareEnabled !== false} onChange={() => edit({ ...draft, hardwareEnabled: draft.hardwareEnabled === false })} /></div>
+              <div className="panel-body hardware-body">
+              <p className="inline-note">{draft.hardwareEnabled === false ? t('仅调整 Gamma；显示器参数保持当前值。', 'Gamma only; monitor settings stay unchanged.') : t('只应用勾选且可用的参数；失败的控制自动暂停。', 'Apply only included, available controls; failed controls pause automatically.')}</p>
               <div className="hardware-controls">{device?.features.slice(0, 3).map(hardwareRow)}</div>
               {!device && <div className="device-loading"><LoaderCircle className="spin" size={22} /><p>{t('读取显示器能力…', 'Reading monitor capabilities…')}</p></div>}
               {moreHardware && <div className="more-hardware">{device?.features.slice(3).map(hardwareRow)}</div>}
+              </div>
               <button className={`more-link ${moreHardware ? 'expanded' : ''}`} aria-expanded={moreHardware} onClick={() => setMoreHardware(!moreHardware)}>{t('更多显示器选项', 'More monitor controls')}<ChevronRight size={18} /></button>
               <div className="hardware-footer"><span className={`status-dot ${device?.features.some(f => f.status === 'available') ? 'on' : ''}`} /><span>{device?.features.some(f => f.status === 'available') ? t('硬件控制可用', 'Hardware controls available') : t('硬件控制未就绪', 'Hardware controls unavailable')}</span><button className="icon-button" title={t('重新检测能力，会先恢复原设置', 'Refresh capabilities after restoring originals')} aria-label={t('重新检测显示器', 'Refresh displays')} disabled={snapshot.busy} onClick={() => void act({ type: 'refresh' })}><RefreshCw size={14} className={snapshot.busy ? 'spin' : ''} /></button></div>
             </section>
@@ -211,7 +230,7 @@ export default function App() {
           <section className="settings-group"><div className="group-heading"><Monitor size={18} /><h2>{t('显示器能力', 'Display capabilities')}</h2><button className="text-button push-right" disabled={snapshot.busy} onClick={() => void act({ type: 'refresh' })}><RefreshCw size={15} className={snapshot.busy ? 'spin' : ''} />{t('重新检测', 'Refresh')}</button></div><p className="device-name">{device?.name ?? t('未连接显示器', 'No display connected')}</p>
             <div className="capability-grid"><div><span>Gamma / SDR</span><span className={device?.gammaAvailable ? 'cap-yes' : 'muted'}>{device?.gammaAvailable ? t('可用', 'Available') : t('不可用', 'Unavailable')}</span></div>{device?.features.map(feature => <div key={feature.key} title={feature.detail}><span>{hardwareLabels[feature.key]?.[en ? 1 : 0]}</span><span className={feature.status === 'available' ? 'cap-yes' : 'muted'}>{feature.status === 'available' ? t('可用', 'Available') : statusText(feature)}</span></div>)}</div>
           </section>
-          <section className="about-row"><div className="about-brand"><img src="/lumashift.svg" alt="" /><div><strong>LumaShift <span>0.1.0</span></strong><p>{t('让画面，恰到好处。', 'Your display. Your balance.')}</p></div></div><div className="button-pair"><button title={t('打开日志目录', 'Open log folder')} disabled={!api.desktop} onClick={() => void api.openLogs().catch(error => setNotice(String(error)))}><FolderOpen size={15} />{t('日志', 'Logs')}</button><button onClick={() => void copyDiagnostics()}><Copy size={15} />{t('诊断信息', 'Diagnostics')}</button></div></section>
+          <section className="about-row"><div className="about-brand"><img src="/lumashift.svg" alt="" /><div><strong>LumaShift <span>{appVersion}</span></strong><p>{t('让画面，恰到好处。', 'Your display. Your balance.')}</p></div></div><div className="button-pair"><button title={t('打开日志目录', 'Open log folder')} disabled={!api.desktop} onClick={() => void api.openLogs().catch(error => setNotice(String(error)))}><FolderOpen size={15} />{t('日志', 'Logs')}</button><button onClick={() => void copyDiagnostics()}><Copy size={15} />{t('诊断信息', 'Diagnostics')}</button></div></section>
           <button className="quit-button" onClick={() => void act({ type: 'quit' })}><Power size={16} />{t('恢复原设置并退出', 'Restore originals & quit')}</button>
         </div>}
       </main>

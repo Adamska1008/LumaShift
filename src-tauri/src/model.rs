@@ -65,6 +65,11 @@ pub struct Profile {
     pub tone: Tone,
     #[serde(default)]
     pub hardware: BTreeMap<String, u32>,
+    #[serde(default = "legacy_hardware_enabled")]
+    pub hardware_enabled: bool,
+}
+fn legacy_hardware_enabled() -> bool {
+    true
 }
 impl Profile {
     pub fn validate(&self) -> Result<(), String> {
@@ -125,6 +130,7 @@ impl Default for Config {
             shortcut: "F6".into(),
             tone: Tone::default(),
             hardware: BTreeMap::new(),
+            hardware_enabled: false,
         };
         let mut game = desktop.clone();
         game.id = "tarkov".into();
@@ -210,6 +216,8 @@ pub struct Snapshot {
     pub warnings: Vec<String>,
     pub shortcut_errors: Vec<String>,
     pub recovery_pending: bool,
+    pub gamma_recovery_pending: bool,
+    pub hardware_recovery_pending: bool,
     pub reason: String,
 }
 
@@ -232,10 +240,48 @@ pub enum Operation {
     Quit,
     ForceQuit,
 }
+impl Operation {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Refresh => "refresh",
+            Self::SelectDisplay(_) => "selectDisplay",
+            Self::SelectPreset(_) => "selectPreset",
+            Self::Preview(_) => "preview",
+            Self::SetEnabled(_) => "setEnabled",
+            Self::Compare(_) => "compare",
+            Self::CaptureShortcut(_) => "captureShortcut",
+            Self::SavePreset(_) => "savePreset",
+            Self::CreatePreset(_) => "createPreset",
+            Self::DeletePreset(_) => "deletePreset",
+            Self::SaveConfig(_) => "saveConfig",
+            Self::Import { .. } => "import",
+            Self::Recover => "recover",
+            Self::Quit => "quit",
+            Self::ForceQuit => "forceQuit",
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_profiles_keep_hardware_and_new_defaults_are_gamma_only() {
+        let profile: Profile =
+            serde_json::from_str(r#"{"id":"old","name":"Old","hardware":{"brightness":60}}"#)
+                .unwrap();
+        assert!(profile.hardware_enabled);
+        assert!(Config::default()
+            .presets
+            .iter()
+            .all(|p| !p.hardware_enabled));
+        let mut disabled = profile;
+        disabled.hardware_enabled = false;
+        let loaded: Profile =
+            serde_json::from_str(&serde_json::to_string(&disabled).unwrap()).unwrap();
+        assert!(!loaded.hardware_enabled);
+        assert_eq!(loaded.hardware["brightness"], 60);
+    }
     #[test]
     fn rejects_imports_that_could_write_out_of_range_values() {
         let mut config = Config::default();

@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>LumaShift error boundary check</title><link rel="stylesheet" href="/src/styles.css"></head>
+<body><div id="root"></div><script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import ErrorBoundary from '/src/ErrorBoundary.tsx';
+function BrokenView() { throw new Error('UI_CHECK: simulated render failure'); }
+function Check() {
+  const [failed, setFailed] = React.useState(false);
+  return React.createElement(ErrorBoundary, null, failed ? React.createElement(BrokenView) :
+    React.createElement('button', { onClick: () => setFailed(true) }, 'Simulate render failure'));
+}
+createRoot(document.getElementById('root')).render(React.createElement(Check));
+</script></body></html>

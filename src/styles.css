@@ -44,6 +44,10 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 760px; background: var(--bg); color: var(--text); font-size: 13px; }
+.ui-error { max-width: 850px; margin: 70px auto; padding: 32px; }
+.ui-error p { line-height: 1.8; }
+.ui-error details { margin-top: 24px; }
+.ui-error pre { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--danger); }
 button, input, select { font: inherit; }
 button { color: var(--text); background: var(--raised); border: 1px solid var(--border); border-radius: 7px; padding: 9px 13px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; transition: background .15s, color .15s, border-color .15s; }
 button:hover:not(:disabled) { background: var(--hover); }
@@ -239,3 +243,71 @@ input.range-value { width: 52px; flex: 0 0 52px; padding: 6px 3px !important; te
 @media (max-width: 1060px) { .sidebar { width: 186px; flex-basis: 186px; padding-left: 10px; padding-right: 10px; } .main { padding: 25px 23px 20px; } .control-grid { gap: 13px; grid-template-columns: minmax(290px, 1.2fr) minmax(242px, 1fr); } .panel-heading { padding: 21px 19px 0; } .curve-wrap { margin-left: 19px; margin-right: 19px; } .tone-sliders, .advanced-controls { padding-left: 19px; padding-right: 19px; } .hardware-controls { padding-left: 19px; padding-right: 19px; } .tone-row { gap: 8px; } .tone-row > label { flex-basis: 70px; } .range-control { gap: 10px; } .hardware-label { gap: 8px; } .hardware-row .range-control { margin-left: 0; } .hardware-footer { padding-left: 19px; padding-right: 19px; } .panel-actions { padding-left: 11px; padding-right: 11px; } .preview-badge { font-size: 10px; } .settings-group { padding-left: 19px; padding-right: 19px; } }
 @media (max-width: 850px) { .sidebar { width: 170px; flex-basis: 170px; } .main { padding: 22px 20px; } .control-grid { grid-template-columns: 1fr; } .curve-wrap svg { height: 145px; } .hardware-controls { display: grid; grid-template-columns: 1fr; } .toolbar { flex-wrap: wrap; } .display-select { max-width: 100%; } .comparison-bar { flex-wrap: wrap; } .shortcut-footer { gap: 10px; flex-wrap: wrap; } .configure-shortcuts { margin-left: 0; } .setting-row { gap: 12px; } .theme-picker button { padding: 7px; } .preview-badge { display: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* The adjustment workspace fits the window; only expanded panel content scrolls. */
+.main-adjust {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.4vh, 14px);
+  padding: clamp(12px, 2.4vh, 24px) clamp(18px, 2.5vw, 36px) 12px;
+  overflow: hidden;
+  min-height: 0;
+}
+.notifications:empty { display: none; }
+.main-adjust > .notifications { flex: 0 1 auto; min-height: 0; max-height: 25%; overflow-y: auto; }
+.main-adjust .banner { margin-bottom: 8px; padding: 9px 12px; }
+.main-adjust .banner:last-child { margin-bottom: 0; }
+.main-adjust > .toolbar, .main-adjust > .page-heading { flex-shrink: 0; margin: 0; }
+.main-adjust .page-heading { min-height: 38px; }
+.main-adjust .preset-heading { flex-wrap: nowrap; overflow: hidden; }
+.main-adjust .preset-heading h1 { font-size: clamp(21px, 2.2vw, 27px); white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.main-adjust .save-status { flex-shrink: 0; }
+.main-adjust > .control-grid { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: clamp(12px, 1.5vw, 20px); align-items: stretch; }
+.main-adjust .panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.main-adjust .panel-heading { flex-shrink: 0; padding: 16px 20px 12px; align-items: center; }
+.main-adjust .panel-heading p { margin-top: 4px; }
+.panel-body { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+.gamma-body { display: flex; flex-direction: column; }
+.gamma-body > * { flex-shrink: 0; }
+.main-adjust .curve-wrap { margin: 0 20px 12px; }
+.main-adjust .curve-wrap svg { height: clamp(72px, calc(30vh - 120px), 155px); display: block; }
+.main-adjust .tone-sliders, .main-adjust .advanced-controls { padding-left: 20px; padding-right: 20px; }
+.main-adjust .tone-sliders { margin-top: auto; margin-bottom: auto; }
+.main-adjust .tone-row { min-height: clamp(38px, 6vh, 50px); }
+.main-adjust .advanced-controls { margin-top: 8px; padding-top: 8px; }
+.main-adjust .panel-actions { flex-shrink: 0; margin-top: 8px; padding: 8px 13px; }
+.main-adjust .hardware-controls { padding: 0 20px; }
+.main-adjust .hardware-row { padding: clamp(8px, 1.2vh, 12px) 0; }
+.main-adjust .hardware-label { margin-bottom: 8px; font-size: 12px; }
+.main-adjust .hardware-label > svg { width: 18px; height: 18px; }
+.main-adjust .hardware-row.unavailable .hardware-label { margin-bottom: 0; }
+.main-adjust .hardware-row .range-control { margin-left: 29px; }
+.main-adjust .inline-note { padding: 0 20px 8px; font-size: 10px; line-height: 1.6; }
+.main-adjust .hardware-body > .inline-note { color: var(--muted); }
+.main-adjust .more-hardware { padding: 0 20px; }
+.main-adjust .more-link { flex-shrink: 0; width: calc(100% - 40px); margin: 0 20px; padding: 9px 0; }
+.main-adjust .hardware-footer { flex-shrink: 0; min-height: 36px; padding: 6px 19px; }
+.main-adjust > .comparison-bar { flex-shrink: 0; margin-top: 0; padding: 0 0 8px; }
+.main-adjust > .shortcut-footer { flex-shrink: 0; padding: 0; gap: 12px; }
+.main-adjust > .empty-device { min-height: 0; }
+
+@media (max-height: 740px) {
+  .sidebar { padding-top: 18px; }
+  .preset-row { min-height: 45px; margin-bottom: 4px; }
+  .preset-select { padding-top: 11px; padding-bottom: 11px; }
+  .sidebar-foot { margin-top: 12px; padding-top: 13px; padding-bottom: 14px; }
+  .main-adjust .panel-heading { padding-top: 12px; padding-bottom: 10px; }
+  .main-adjust .panel-heading h2 { font-size: 14px; }
+}
+@media (max-width: 1060px) {
+  .main-adjust { padding-left: 18px; padding-right: 18px; }
+  .main-adjust .panel-heading { padding-left: 14px; padding-right: 14px; }
+  .main-adjust .curve-wrap { margin-left: 14px; margin-right: 14px; }
+  .main-adjust .tone-sliders, .main-adjust .advanced-controls, .main-adjust .hardware-controls, .main-adjust .more-hardware { padding-left: 14px; padding-right: 14px; }
+  .main-adjust .inline-note { padding-left: 14px; padding-right: 14px; }
+  .main-adjust .hardware-row .range-control { margin-left: 0; }
+  .main-adjust .more-link { width: calc(100% - 28px); margin-left: 14px; margin-right: 14px; }
+  .main-adjust .tone-row > label { flex-basis: 66px; }
+  .main-adjust .range-control { gap: 8px; }
+  .main-adjust .panel-actions { padding-left: 7px; padding-right: 7px; }
+}

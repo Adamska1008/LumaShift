@@ -1,11 +1,14 @@
 //! All display handles stay on the display worker thread. No game process access.
 use crate::{
+    ddc,
     model::{DisplayInfo, FeatureInfo, FEATURES},
     tone::{self, Ramp},
 };
 use std::{
+    cell::Cell,
     collections::{BTreeMap, HashSet},
     mem::size_of,
+    time::{Duration, Instant},
 };
 use windows::{
     core::{w, BOOL, PCWSTR},
@@ -190,6 +193,45 @@ pub struct Display {
     pub info: DisplayInfo,
     dc: HDC,
     physical: Vec<PHYSICAL_MONITOR>,
+    last_ddc: Cell<Option<Instant>>,
+}
+
+struct Vcp<'a> {
+    display: &'a Display,
+    code: u8,
+}
+impl ddc::Transport for Vcp<'_> {
+    fn read(&mut self) -> Result<(u32, u32), String> {
+        let handle = self.display.handle()?;
+        self.display.wait_ddc();
+        let (mut current, mut maximum) = (0, 0);
+        let result = unsafe {
+            GetVCPFeatureAndVCPFeatureReply(
+                handle,
+                self.code,
+                None,
+                &mut current,
+                Some(&mut maximum),
+            )
+        };
+        let error = (result == 0).then(windows::core::Error::from_win32);
+        self.display.last_ddc.set(Some(Instant::now()));
+        if let Some(error) = error {
+            return Err(format!("DDC/CI read failed: {error}"));
+        }
+        Ok((current, maximum))
+    }
+    fn write(&mut self, value: u32) -> Result<(), String> {
+        let handle = self.display.handle()?;
+        self.display.wait_ddc();
+        let result = unsafe { SetVCPFeature(handle, self.code, value) };
+        let error = (result == 0).then(windows::core::Error::from_win32);
+        self.display.last_ddc.set(Some(Instant::now()));
+        match error {
+            Some(error) => Err(format!("DDC/CI write failed: {error}")),
+            None => Ok(()),
+        }
+    }
 }
 impl Drop for Display {
     fn drop(&mut self) {
@@ -204,6 +246,25 @@ impl Drop for Display {
     }
 }
 impl Display {
+    fn wait_ddc(&self) {
+        if let Some(last) = self.last_ddc.get() {
+            // Conservative settling time, separate from the Win32 call duration.
+            if let Some(delay) = Duration::from_millis(50).checked_sub(last.elapsed()) {
+                std::thread::sleep(delay);
+            }
+        }
+    }
+    fn vcp(&self, key: &str) -> Result<Vcp<'_>, String> {
+        let code = FEATURES
+            .iter()
+            .find(|(name, _)| *name == key)
+            .ok_or("Unknown monitor control")?
+            .1;
+        Ok(Vcp {
+            display: self,
+            code,
+        })
+    }
     fn handle(&self) -> Result<HANDLE, String> {
         if self.physical.len() != 1 {
             return Err("DDC/CI requires one physical monitor for this output".into());
@@ -230,46 +291,11 @@ impl Display {
         Ok(())
     }
     pub fn read_vcp(&self, key: &str) -> Result<(u32, u32), String> {
-        let code = FEATURES
-            .iter()
-            .find(|(name, _)| *name == key)
-            .ok_or("Unknown monitor control")?
-            .1;
-        let (mut current, mut maximum) = (0, 0);
-        if unsafe {
-            GetVCPFeatureAndVCPFeatureReply(
-                self.handle()?,
-                code,
-                None,
-                &mut current,
-                Some(&mut maximum),
-            )
-        } == 0
-        {
-            return Err(format!("{key}: DDC/CI read failed"));
-        }
-        if maximum == 0 || current > maximum {
-            return Err(format!("{key}: monitor returned an invalid range"));
-        }
-        Ok((current, maximum))
+        ddc::read(&mut self.vcp(key)?).map_err(|e| format!("{key}: {e}"))
     }
     pub fn write_raw(&mut self, key: &str, value: u32) -> Result<(), String> {
-        let code = FEATURES
-            .iter()
-            .find(|(name, _)| *name == key)
-            .ok_or("Unknown monitor control")?
-            .1;
-        let (_, maximum) = self.read_vcp(key)?;
-        if value > maximum {
-            return Err(format!("{key}: value exceeds monitor range"));
-        }
-        if unsafe { SetVCPFeature(self.handle()?, code, value) } == 0 {
-            return Err(format!("{key}: DDC/CI write failed"));
-        }
-        let (actual, max) = self.read_vcp(key)?;
-        if actual != value {
-            return Err(format!("{key}: monitor did not apply the requested value"));
-        }
+        let (actual, max) =
+            ddc::write_verified(&mut self.vcp(key)?, value).map_err(|e| format!("{key}: {e}"))?;
         if let Some(feature) = self.info.features.iter_mut().find(|f| f.key == key) {
             feature.value = Some(((actual as f64 / max as f64) * 100.0).round() as u32);
         }
@@ -348,6 +374,7 @@ pub fn enumerate() -> Vec<Display> {
             },
             dc,
             physical,
+            last_ddc: Cell::new(None),
         };
         display.info.gamma_available = hdr == Some(false) && display.read_gamma().is_ok();
         let mut caps = None;
