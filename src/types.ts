@@ -1,6 +1,6 @@
 export interface Tone { gamma: number; shadows: number; contrast: number; highlights: number; exposure: number; temperature: number; blackPoint: number }
 export interface Profile { id: string; name: string; shortcut: string; tone: Tone; hardware: Record<string, number>; hardwareEnabled?: boolean }
-export interface Settings { theme: 'system' | 'dark' | 'light'; language: 'zh' | 'en'; startMinimized: boolean; applyLastOnStart: boolean; toggleShortcut: string; cycleShortcut: string }
+export interface Settings { theme: 'system' | 'dark' | 'light'; language: 'zh' | 'en'; closeAction: 'tray' | 'quit'; toggleShortcut: string; cycleShortcut: string }
 export interface Config { version: number; presets: Profile[]; activePreset: string; selectedDisplay: string | null; settings: Settings }
 export interface Feature { key: string; status: 'available' | 'unsupported' | 'unavailable' | 'unknown'; value: number | null; max: number; detail: string }
 export interface Display { id: string; name: string; device: string; primary: boolean; hdr: boolean | null; gammaAvailable: boolean; features: Feature[] }
@@ -17,7 +17,7 @@ export function defaultConfig(): Config {
   return { version: 1, presets: [
     { id: 'desktop', name: '桌面', shortcut: 'F6', tone: { ...neutralTone }, hardware: {}, hardwareEnabled: false },
     { id: 'tarkov', name: '塔科夫', shortcut: 'F7', tone: { ...neutralTone, gamma: 1.2, shadows: 25, contrast: 8 }, hardware: {}, hardwareEnabled: false },
-  ], activePreset: 'desktop', selectedDisplay: 'preview-display', settings: { theme: 'system', language: 'zh', startMinimized: false, applyLastOnStart: false, toggleShortcut: 'F9', cycleShortcut: 'F10' } };
+  ], activePreset: 'desktop', selectedDisplay: 'preview-display', settings: { theme: 'system', language: 'zh', closeAction: 'tray', toggleShortcut: 'F9', cycleShortcut: 'F10' } };
 }
 export function curve(tone: Tone, x: number): number {
   let y = x ** (1 / tone.gamma);

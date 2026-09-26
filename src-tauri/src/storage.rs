@@ -208,8 +208,13 @@ mod tests {
         let mut config = Config::default();
         store.save(&config).unwrap();
         config.settings.theme = "light".into();
+        config.settings.close_action = crate::model::CloseAction::Quit;
         store.save(&config).unwrap();
         assert_eq!(store.load().unwrap().settings.theme, "light");
+        assert_eq!(
+            store.load().unwrap().settings.close_action,
+            crate::model::CloseAction::Quit
+        );
         std::fs::remove_file(dir.join("config.json")).unwrap();
         std::fs::remove_dir(dir).unwrap();
     }

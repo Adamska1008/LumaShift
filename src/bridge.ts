@@ -1,7 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { defaultConfig, type Config, type Operation, type Snapshot } from './types';
+import { defaultConfig, type Config, type Operation, type Settings, type Snapshot } from './types';
 
 export const desktop = isTauri();
 let demo: Snapshot | undefined;
@@ -30,7 +30,11 @@ function validatePreview(config: Config) {
     for (const [key, [min, max]] of Object.entries(ranges)) { const value = p.tone[key as keyof typeof ranges]; if (!Number.isFinite(value) || value < min || value > max) throw new Error(`Invalid ${key}`); }
     for (const [key, value] of Object.entries(p.hardware)) if (!['brightness', 'contrast', 'saturation', 'sharpness', 'redGain', 'greenGain', 'blueGain'].includes(key) || !Number.isInteger(value) || value < 0 || value > 100) throw new Error('Invalid hardware parameter');
   }
-  if (!config.settings || !['light', 'dark', 'system'].includes(config.settings.theme) || !['zh', 'en'].includes(config.settings.language) || typeof config.settings.startMinimized !== 'boolean' || typeof config.settings.applyLastOnStart !== 'boolean') throw new Error('Invalid preferences');
+  if (!config.settings || !['light', 'dark', 'system'].includes(config.settings.theme) || !['zh', 'en'].includes(config.settings.language)) throw new Error('Invalid preferences');
+  if (config.settings.closeAction === undefined) config.settings.closeAction = 'tray';
+  if (!['tray', 'quit'].includes(config.settings.closeAction)) throw new Error('Invalid close action');
+  const legacy = config.settings as Settings & { startMinimized?: boolean; applyLastOnStart?: boolean };
+  delete legacy.startMinimized; delete legacy.applyLastOnStart;
   const keys = config.presets.map(p => p.shortcut).concat(config.settings.toggleShortcut, config.settings.cycleShortcut).filter(Boolean);
   if (new Set(keys).size !== keys.length) throw new Error('Shortcut already assigned');
   if (keys.some(k => typeof k !== 'string')) throw new Error('Invalid shortcut');

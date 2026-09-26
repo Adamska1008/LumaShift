@@ -181,15 +181,6 @@ pub fn start(app: &tauri::AppHandle) -> Result<Shared, String> {
             engine
                 .store
                 .log("Display worker ready; capabilities read without applying effects");
-            let apply = engine.state.config.settings.apply_last_on_start
-                && !engine.state.recovery_pending
-                && std::env::var_os("LUMASHIFT_SAFE_START").is_none();
-            engine.store.log(&format!("Startup: auto-apply={apply}"));
-            if apply {
-                if let Err(e) = engine.handle(Operation::SetEnabled(true)) {
-                    engine.state.error = Some(e);
-                }
-            }
             engine.state.busy = false;
             engine.publish("ready");
             engine.run(rx);

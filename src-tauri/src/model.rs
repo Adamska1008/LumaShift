@@ -90,13 +90,25 @@ impl Profile {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CloseAction {
+    #[default]
+    Tray,
+    Quit,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Settings {
     pub theme: String,
     pub language: String,
-    pub start_minimized: bool,
-    pub apply_last_on_start: bool,
+    pub close_action: CloseAction,
+    // Accept retired settings in existing files without exporting or applying them.
+    #[serde(rename = "startMinimized", skip_serializing)]
+    _legacy_start_minimized: bool,
+    #[serde(rename = "applyLastOnStart", skip_serializing)]
+    _legacy_apply_last_on_start: bool,
     pub toggle_shortcut: String,
     pub cycle_shortcut: String,
 }
@@ -105,8 +117,9 @@ impl Default for Settings {
         Self {
             theme: "system".into(),
             language: "zh".into(),
-            start_minimized: false,
-            apply_last_on_start: false,
+            close_action: CloseAction::Tray,
+            _legacy_start_minimized: false,
+            _legacy_apply_last_on_start: false,
             toggle_shortcut: "F9".into(),
             cycle_shortcut: "F10".into(),
         }
@@ -265,6 +278,33 @@ impl Operation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retired_launch_options_load_but_are_not_exported() {
+        let mut config = serde_json::to_value(Config::default()).unwrap();
+        let settings = config["settings"].as_object_mut().unwrap();
+        settings.remove("closeAction");
+        settings.insert("startMinimized".into(), true.into());
+        settings.insert("applyLastOnStart".into(), true.into());
+        let loaded: Config = serde_json::from_value(config).unwrap();
+        loaded.validate().unwrap();
+        assert_eq!(loaded.settings.close_action, CloseAction::Tray);
+        let exported = serde_json::to_value(loaded).unwrap();
+        assert_eq!(exported["settings"]["closeAction"], "tray");
+        assert!(exported["settings"].get("startMinimized").is_none());
+        assert!(exported["settings"].get("applyLastOnStart").is_none());
+    }
+    #[test]
+    fn rejects_invalid_close_actions_in_imports() {
+        let mut config = serde_json::to_value(Config::default()).unwrap();
+        for invalid in [
+            serde_json::json!("exit"),
+            serde_json::json!(true),
+            serde_json::Value::Null,
+        ] {
+            config["settings"]["closeAction"] = invalid;
+            assert!(serde_json::from_value::<Config>(config.clone()).is_err());
+        }
+    }
     #[test]
     fn legacy_profiles_keep_hardware_and_new_defaults_are_gamma_only() {
         let profile: Profile =

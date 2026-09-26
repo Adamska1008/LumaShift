@@ -1,0 +1,102 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '[0-9]*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Validate release version
+        id: version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: node scripts/check-release.mjs
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.92.0-x86_64-pc-windows-msvc --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup override set 1.92.0-x86_64-pc-windows-msvc
+
+      - name: Install frontend dependencies
+        run: npm.cmd ci
+
+      - name: Test release validation
+        run: node --test scripts/check-release.test.mjs
+
+      - name: Test Rust
+        run: npm.cmd run test:rust
+
+      - name: Build Windows executable
+        run: npm.cmd run desktop:build
+
+      - name: Prepare release asset
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          Copy-Item -LiteralPath src-tauri/target/release/lumashift.exe -Destination "release/LumaShift-$env:RELEASE_VERSION-windows-x64.exe"
+          Copy-Item -LiteralPath LICENSE -Destination release/LICENSE
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64
+          path: |
+            release/*.exe
+            release/LICENSE
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-x64
+          path: release
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        shell: bash
+        run: |
+          args=(--verify-tag --generate-notes --title "LumaShift $TAG_NAME")
+          if [[ "$PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG_NAME" "release/LumaShift-$RELEASE_VERSION-windows-x64.exe" "release/LICENSE" "${args[@]}"

@@ -1,0 +1,89 @@
+# LumaShift
+
+Windows SDR 画面调节工具，支持 Gamma 曲线、显示器 DDC/CI 控制、预设和全局快捷键。
+
+基于 Tauri 2、Rust、React 和 TypeScript 构建。
+
+## 功能
+
+- **画面调节**：Gamma、暗部提升、对比度、高光、曝光、色温倾向和黑位提升。
+- **显示器控制**：亮度、对比度，以及设备支持的饱和度、锐度和 RGB 增益；可按预设启用。
+- **预设管理**：新建、保存、重命名、删除，支持 JSON 导入与导出。
+- **全局快捷键**：切换预设、开关效果，支持自定义 F 键及组合键。
+- **实时预览**：调整即时生效，支持原始效果与当前效果对比。
+- **托盘常驻**：关闭窗口后继续保持效果和快捷键。
+- **主题与语言**：浅色、深色、跟随系统；简体中文、English。
+
+## 使用
+
+运行环境：Windows x64、SDR 显示模式、WebView2 Runtime。硬件调节需要显示器支持并启用 DDC/CI；不支持的设备仍可使用 Gamma 功能。
+
+运行构建好的 EXE 后：
+
+1. 选择显示器和预设，开启效果。
+2. 调整画面参数，按需启用显示器参数。
+3. 点击“保存预设”，在“快捷键”页面配置切换按键。
+
+| 动作 | 默认快捷键 |
+| --- | --- |
+| 桌面预设 | F6 |
+| 塔科夫预设 | F7 |
+| 开关效果 | F9 |
+| 循环切换预设 | F10 |
+
+点击窗口 **×** 默认隐藏到托盘，可在设置中改为退出程序。托盘菜单也提供“恢复并退出”。关闭效果或正常退出时，程序会尝试恢复调整前的设置。仅关闭预设中的显示器控制不会撤销已应用的硬件调整。
+
+更新前需先从托盘退出旧实例，再运行新版。
+
+## 开发
+
+需要 Node.js 与 npm、Rust 1.88+（MSVC 工具链）、Visual Studio C++ 桌面开发工具、Windows SDK 和 WebView2 Runtime。
+
+```powershell
+npm.cmd ci
+npm.cmd run desktop
+```
+
+仅预览前端界面：
+
+```powershell
+npm.cmd run dev
+```
+
+访问 `http://127.0.0.1:1420/`。浏览器预览使用模拟数据，不控制真实显示器。两种开发模式共用 1420 端口，请分别运行。
+
+## 构建与测试
+
+```powershell
+# 构建 Windows EXE
+npm.cmd run desktop:build
+
+# 前端类型检查与构建
+npm.cmd run build
+
+# Rust 单元测试
+npm.cmd run test:rust
+```
+
+构建产物：`src-tauri/target/release/lumashift.exe`。
+
+## 发布
+
+提交代码后，推送与项目版本一致的 tag，即可自动构建并发布 Windows x64 EXE：
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Release 附件为 `LumaShift-0.1.0-windows-x64.exe`。版本号由维护者指定，工作流不会自动修改；tag 与项目版本不一致时停止发布。
+
+## 配置与日志
+
+数据目录：`%APPDATA%\app.lumashift.desktop`，可从设置页的“日志”按钮打开。
+
+需求、开发说明和排错记录见 [`.local/docs/`](.local/docs/)。
+
+## 许可证
+
+[MIT License](LICENSE)

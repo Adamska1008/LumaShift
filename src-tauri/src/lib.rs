@@ -9,7 +9,7 @@ mod storage;
 mod tone;
 
 use engine::Shared;
-use model::{Operation, Snapshot};
+use model::{CloseAction, Operation, Snapshot};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -132,7 +132,6 @@ pub fn run() {
         })
         .setup(|app| {
             let shared = engine::start(app.handle()).map_err(std::io::Error::other)?;
-            let minimized = shared.read().config.settings.start_minimized;
             app.manage(shared.clone());
             if let Some(window) = app.get_webview_window("main") {
                 let root = shared.root.clone();
@@ -221,20 +220,20 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
-            if !minimized {
-                if let Some(window) = app.get_webview_window("main") {
-                    window.show()?;
-                }
+            if let Some(window) = app.get_webview_window("main") {
+                window.show()?;
             }
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                window
-                    .state::<Shared>()
-                    .send(Operation::CaptureShortcut(false));
                 api.prevent_close();
-                let _ = window.hide();
+                let state = window.state::<Shared>();
+                state.send(Operation::CaptureShortcut(false));
+                match state.read().config.settings.close_action {
+                    CloseAction::Tray => { let _ = window.hide(); }
+                    CloseAction::Quit => state.send(Operation::Quit),
+                }
             }
             if let tauri::WindowEvent::Focused(false) = event {
                 window

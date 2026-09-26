@@ -1,9 +1,10 @@
 [package]
 name = "lumashift"
-version = "0.1.4"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Display tone and monitor controls for Windows"
+license = "MIT"
 
 [lib]
 name = "lumashift_lib"
