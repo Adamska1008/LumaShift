@@ -20,6 +20,7 @@ EXE 仍依赖目标系统的 WebView2 Runtime，不是安装器。本流程不�
 - 构建或测试失败时不会执行发布 job，可在 Actions 中重跑失败任务。
 - 已存在同名 Release 时，创建步骤会报错，不自动覆盖已发布的 EXE。若首次上传中断留下草稿，应检查草稿和资产后再处理。
 - 同一 tag 的运行串行执行，不取消正在执行的发布任务。
+- 如果 tag 已推送但没有运行记录，可在 Actions → Release Windows → Run workflow 中选择 main 并输入已有 tag，或执行 `gh workflow run release.yml --ref main -f tag=v0.1.0`。工作流从 main 加载，但源码明确检出 refs/tags/<tag>，版本检查及 Release 均使用该 tag，不移动或重建标签。
 
 ## 验证范围
 
