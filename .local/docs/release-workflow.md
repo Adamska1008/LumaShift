@@ -14,7 +14,7 @@ EXE 仍依赖目标系统的 WebView2 Runtime，不是安装器。本流程不�
 
 ## 使用与重试
 
-- 先提交工作流及所需代码，再创建并推送 tag。当前用户确认的版本为 0.1.0。
+- 先提交工作流及所需代码并推送 main，确认 GitHub 已注册工作流后，再单独创建并推送 tag。初始化空仓库时不要把首次 main 推送和版本 tag 合在一个 atomic push 中。当前用户确认的版本为 0.1.0。
 - 修改版本时由维护者明确决定并同步上述文件；工作流不会生成 tag、升级版本或回写提交。
 - 使用仓库自带 GITHUB_TOKEN，不需要个人访问令牌；仓库策略需允许发布 job 的 contents:write。
 - 构建或测试失败时不会执行发布 job，可在 Actions 中重跑失败任务。
@@ -25,5 +25,18 @@ EXE 仍依赖目标系统的 WebView2 Runtime，不是安装器。本流程不�
 ## 验证范围
 
 本地验证版本一致性检查、异常 tag / 不一致版本拒绝、预发布识别和 YAML 结构；当前版本的 Windows release 构建已通过。远端为 `Adamska1008/LumaShift`，云端 runner 和发布权限由首次 tag 工作流运行验证。
+
+## 2026-09-27：tag push 触发核查
+
+首次向空仓库同时 atomic push main 与 v0.1.0 后，tag 和工作流均存在且 Actions 已启用，但没有生成 push 运行记录。GitHub API 未提供丢失事件的具体原因；不能把仓库初始化时的注册时序判断为已确认根因。
+
+后续独立推送两个临时非版本 tag，直接验证同一发布工作流：
+
+- [运行 36264673508](https://github.com/Adamska1008/LumaShift/actions/runs/36264673508)：指向当前 main，event 为 push。
+- [运行 36264768537](https://github.com/Adamska1008/LumaShift/actions/runs/36264768537)：指向 v0.1.0 原始提交 df03115，使用尚未加入手动入口的工作流，event 同样为 push。
+
+两次均正常检出源码并运行到 Validate release version，因测试 tag 不是版本号而按预期拒绝，publish 跳过，没有创建测试 Release。证明原始和当前工作流的 tag push 触发均可用；测试未修改应用版本或移动 v0.1.0。测试 tag 在验证后清理，运行记录保留。
+
+正常发布仍以 tag push 为入口。main 与版本 tag 分开推送，尤其首次初始化仓库时先确认工作流已注册；workflow_dispatch 仅用于补发或排错，不能视为自动触发链路的验证结果。
 
 参考：[GitHub CLI release create](https://cli.github.com/manual/gh_release_create)、[Windows 2022 runner 环境](https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md)。

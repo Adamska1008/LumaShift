@@ -69,9 +69,10 @@ npm.cmd run test:rust
 
 ## 发布
 
-提交代码后，推送与项目版本一致的 tag，即可自动构建并发布 Windows x64 EXE：
+先推送代码，再单独推送与项目版本一致的 tag，自动构建并发布 Windows x64 EXE：
 
 ```powershell
+git push origin main
 git tag v0.1.0
 git push origin v0.1.0
 ```
