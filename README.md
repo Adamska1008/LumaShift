@@ -75,11 +75,11 @@ npm.cmd run test:rust
 
 ```powershell
 git push origin main
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
-Release 附件为 `LumaShift-0.1.0-windows-x64.exe`。版本号由维护者指定，工作流不会自动修改；tag 与项目版本不一致时停止发布。
+Release 附件为 `LumaShift-0.1.1-windows-x64.exe`。版本号由维护者指定，工作流不会自动修改；tag 与项目版本不一致时停止发布。
 
 ## 配置与日志
 
