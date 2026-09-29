@@ -1,7 +1,7 @@
 //! All display handles stay on the display worker thread. No game process access.
 use crate::{
     ddc,
-    model::{DisplayInfo, FeatureInfo, FEATURES},
+    model::{DisplayInfo, FEATURES},
     tone::{self, Ramp},
 };
 use std::{
@@ -377,55 +377,9 @@ pub fn enumerate() -> Vec<Display> {
             last_ddc: Cell::new(None),
         };
         display.info.gamma_available = hdr == Some(false) && display.read_gamma().is_ok();
-        let mut caps = None;
-        if let Ok(handle) = display.handle() {
-            unsafe {
-                let mut length = 0;
-                if GetCapabilitiesStringLength(handle, &mut length) != 0
-                    && (1..=32768).contains(&length)
-                {
-                    let mut bytes = vec![0u8; length as usize];
-                    if CapabilitiesRequestAndCapabilitiesReply(handle, &mut bytes) != 0 {
-                        caps = vcp_codes(&String::from_utf8_lossy(&bytes));
-                    }
-                }
-            }
-        }
-        for (key, code) in FEATURES {
-            let missing = caps.as_ref().is_some_and(|values| !values.contains(&code));
-            let item = if missing {
-                FeatureInfo {
-                    key: key.into(),
-                    status: "unsupported".into(),
-                    value: None,
-                    max: 0,
-                    detail: "Not exposed in monitor capabilities".into(),
-                }
-            } else {
-                match display.read_vcp(key) {
-                    Ok((current, max)) => FeatureInfo {
-                        key: key.into(),
-                        status: "available".into(),
-                        value: Some((current as f64 / max as f64 * 100.0).round() as u32),
-                        max,
-                        detail: String::new(),
-                    },
-                    Err(detail) => FeatureInfo {
-                        key: key.into(),
-                        status: if caps.is_some() {
-                            "unavailable"
-                        } else {
-                            "unknown"
-                        }
-                        .into(),
-                        value: None,
-                        max: 0,
-                        detail,
-                    },
-                }
-            };
-            display.info.features.push(item);
-        }
+        // DDC/CI capability probing is retired with the monitor-control UI.
+        // Keep physical handles available only so older recovery journals can
+        // restore values that a previous build may have changed.
         result.push(display);
     }
     result.sort_by_key(|d| !d.info.primary);

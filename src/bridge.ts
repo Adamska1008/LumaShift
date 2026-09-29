@@ -13,9 +13,8 @@ function previewState(): Snapshot {
   try { const saved = localStorage.getItem('lumashift-layout-preview'); if (saved) { const parsed = JSON.parse(saved); validatePreview(parsed); config = parsed; } } catch { /* Preview storage is optional. */ }
   config.selectedDisplay = 'preview-display';
   demo = { revision: 0, config, draft: structuredClone(config.presets.find(p => p.id === config.activePreset) ?? config.presets[0]),
-    displays: [{ id: 'preview-display', name: '演示显示器 · Demo display', device: 'Preview only', primary: true, hdr: false, gammaAvailable: true,
-      features: ['brightness', 'contrast', 'saturation', 'sharpness', 'redGain', 'greenGain', 'blueGain'].map((key, i) => ({ key, status: i < 4 ? 'available' : 'unsupported', value: i < 4 ? [70, 50, 55, 50][i] : null, max: i < 4 ? 100 : 0, detail: '' })) }],
-    enabled: false, comparing: false, busy: false, error: null, warnings: [], shortcutErrors: [], recoveryPending: false, gammaRecoveryPending: false, hardwareRecoveryPending: false, reason: 'ready' };
+    displays: [{ id: 'preview-display', name: '演示显示器 · Demo display', device: 'Preview only', primary: true, hdr: false, gammaAvailable: true, features: [] }],
+    enabled: false, comparing: false, busy: false, error: null, warnings: [], shortcutErrors: [], recoveryPending: false, gammaRecoveryPending: false, hardwareRecoveryPending: false, colorRecoveryPending: false, saturationError: null, reason: 'ready' };
   return demo;
 }
 function validatePreview(config: Config) {
@@ -24,9 +23,11 @@ function validatePreview(config: Config) {
   if (ids.size !== config.presets.length || !ids.has(config.activePreset)) throw new Error('Invalid preset IDs');
   for (const p of config.presets) {
     if (typeof p.id !== 'string' || !p.id || typeof p.name !== 'string' || !p.name.trim() || [...p.name].length > 40 || typeof p.shortcut !== 'string') throw new Error('Invalid preset');
-    const ranges = { gamma: [.6, 2.2], shadows: [0, 60], contrast: [-40, 40], highlights: [-40, 40], exposure: [-.5, .5], temperature: [-50, 50], blackPoint: [0, 8] };
+    const ranges = { gamma: [.6, 2.2], shadows: [0, 60], contrast: [-40, 40], highlights: [-40, 40], exposure: [-.5, .5], temperature: [-50, 50], blackPoint: [0, 8], saturation: [0, 200] };
+    if (p.hasSaved !== undefined && typeof p.hasSaved !== 'boolean') throw new Error('Invalid save state');
     if (p.hardwareEnabled !== undefined && typeof p.hardwareEnabled !== 'boolean') throw new Error('Invalid hardware switch');
     if (!p.tone || !p.hardware || Array.isArray(p.hardware)) throw new Error('Missing preset parameters');
+    if (p.tone.saturation === undefined) p.tone.saturation = 100;
     for (const [key, [min, max]] of Object.entries(ranges)) { const value = p.tone[key as keyof typeof ranges]; if (!Number.isFinite(value) || value < min || value > max) throw new Error(`Invalid ${key}`); }
     for (const [key, value] of Object.entries(p.hardware)) if (!['brightness', 'contrast', 'saturation', 'sharpness', 'redGain', 'greenGain', 'blueGain'].includes(key) || !Number.isInteger(value) || value < 0 || value > 100) throw new Error('Invalid hardware parameter');
   }
@@ -53,7 +54,7 @@ export async function command(operation: Operation): Promise<Snapshot> {
     switch (operation.type) {
       case 'preview': if (operation.payload.id === s.config.activePreset) s.draft = structuredClone(operation.payload); s.reason = 'preview'; break;
       case 'setEnabled': s.enabled = operation.payload; s.comparing = false; break;
-      case 'compare': s.comparing = operation.payload; break;
+      case 'compare': s.comparing = operation.payload && s.enabled; break;
       case 'captureShortcut': break;
       case 'selectPreset': {
         const preset = s.config.presets.find(p => p.id === operation.payload); if (!preset) throw new Error('Preset not found');
@@ -62,11 +63,12 @@ export async function command(operation: Operation): Promise<Snapshot> {
         s.config.activePreset = preset.id; s.enabled = true; s.comparing = false; s.reason = 'profile'; break;
       }
       case 'selectDisplay': s.config.selectedDisplay = operation.payload; s.enabled = false; break;
+      case 'retrySaturation': s.saturationError = null; break;
       case 'refresh': s.enabled = false; s.comparing = false; break;
-      case 'savePreset': s.draft.name = operation.payload.trim(); s.config.presets = s.config.presets.map(p => p.id === s.draft.id ? structuredClone(s.draft) : p); draftCache.delete(s.draft.id); s.reason = 'saved'; break;
+      case 'savePreset': s.draft.hasSaved = true; s.comparing = false; s.draft.name = operation.payload.trim(); s.config.presets = s.config.presets.map(p => p.id === s.draft.id ? structuredClone(s.draft) : p); draftCache.delete(s.draft.id); s.reason = 'saved'; break;
       case 'createPreset': {
-        draftCache.set(s.draft.id, structuredClone(s.draft)); s.draft = { ...structuredClone(s.draft), id: crypto.randomUUID(), name: operation.payload.trim(), shortcut: '' };
-        s.config.presets.push(structuredClone(s.draft)); s.config.activePreset = s.draft.id; s.reason = 'profile'; break;
+        draftCache.set(s.draft.id, structuredClone(s.draft)); s.draft = { ...structuredClone(s.draft), id: crypto.randomUUID(), name: operation.payload.trim(), shortcut: '', hasSaved: false };
+        s.config.presets.push(structuredClone(s.draft)); s.config.activePreset = s.draft.id; s.comparing = false; s.reason = 'profile'; break;
       }
       case 'deletePreset':
         if (s.config.presets.length < 2) throw new Error('Keep at least one preset');

@@ -14,7 +14,7 @@ pub fn matches(requested: &Ramp, actual: &Ramp) -> bool {
 
 pub fn build(original: &Ramp, tone: &Tone) -> Ramp {
     // The neutral profile preserves the user's calibration bit for bit.
-    if *tone == Tone::default() {
+    if tone.gamma_only() == Tone::default() {
         return *original;
     }
     std::array::from_fn(|channel| {
@@ -44,6 +44,18 @@ pub fn build(original: &Ramp, tone: &Tone) -> Ramp {
 mod tests {
     use super::*;
     #[test]
+    fn saturation_never_changes_gamma_ramp() {
+        let mut baseline = identity();
+        baseline[0][100] = 26000;
+        for value in [0.0, 100.0, 200.0] {
+            let tone = Tone {
+                saturation: value,
+                ..Tone::default()
+            };
+            assert_eq!(build(&baseline, &tone), baseline);
+        }
+    }
+    #[test]
     fn neutral_preserves_existing_non_identity_calibration() {
         let mut baseline = identity();
         for n in &mut baseline[2] {
@@ -57,6 +69,7 @@ mod tests {
             for contrast in [-40.0, 0.0, 40.0] {
                 for exposure in [-0.5, 0.5] {
                     let profile = Tone {
+                        saturation: 100.0,
                         gamma,
                         contrast,
                         exposure,

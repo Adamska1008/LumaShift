@@ -1,7 +1,7 @@
 use crate::{
     hardware,
     model::*,
-    native, recovery,
+    native, recovery, saturation,
     shortcuts::{self, Action},
     storage::{Recovery, Storage},
     tone,
@@ -97,6 +97,7 @@ struct Engine {
     session: Option<Recovery>,
     expected_gamma: Option<tone::Ramp>,
     hardware: hardware::Control,
+    saturation: saturation::Control<saturation::WindowsTarget>,
     drafts: HashMap<String, Profile>,
 }
 
@@ -143,6 +144,8 @@ pub fn start(app: &tauri::AppHandle) -> Result<Shared, String> {
         recovery_pending: root.join("recovery.json").exists() || hardware.pending(),
         gamma_recovery_pending: root.join("recovery.json").exists(),
         hardware_recovery_pending: hardware.pending(),
+        color_recovery_pending: root.join("color-recovery.json").exists(),
+        saturation_error: None,
         reason: "startup".into(),
     };
     let (tx, rx) = mpsc::channel();
@@ -159,6 +162,10 @@ pub fn start(app: &tauri::AppHandle) -> Result<Shared, String> {
         .spawn(move || {
             let mut engine = Engine {
                 capturing_shortcut: false,
+                saturation: saturation::Control::new(
+                    saturation::WindowsTarget::new(handle.clone()),
+                    store.root.join("color-recovery.json"),
+                ),
                 app: handle,
                 shared: worker_shared,
                 store,
@@ -196,8 +203,10 @@ impl Engine {
             self.hardware.decorate(display);
         }
         self.state.hardware_recovery_pending = self.hardware.pending();
-        self.state.recovery_pending =
-            self.state.gamma_recovery_pending || self.state.hardware_recovery_pending;
+        self.state.color_recovery_pending = self.saturation.recovery_pending;
+        self.state.recovery_pending = self.state.gamma_recovery_pending
+            || self.state.hardware_recovery_pending
+            || self.state.color_recovery_pending;
         self.state.revision += 1;
         self.state.reason = reason.into();
         *self
@@ -253,7 +262,17 @@ impl Engine {
                                 vec!["Display configuration changed; effects paused".into()];
                             self.state.busy = false;
                             self.publish("topology");
-                        } else if self.state.enabled && !self.state.comparing {
+                        } else if self.state.enabled {
+                            if self.state.saturation_error.is_none() {
+                                if let Err(error) = self.saturation.check() {
+                                    let restore = self.restore_saturation();
+                                    self.state.saturation_error = Some(match restore {
+                                        Ok(()) => error,
+                                        Err(e) => format!("{error}; restore: {e}"),
+                                    });
+                                    self.publish("saturation-paused");
+                                }
+                            }
                             if let (Some(expected), Ok(index)) =
                                 (self.expected_gamma.as_ref(), self.index())
                             {
@@ -262,6 +281,7 @@ impl Engine {
                                     .is_ok_and(|actual| !tone::matches(expected, &actual))
                                 {
                                     self.state.enabled = false;
+                                    self.state.comparing = false;
                                     if let Err(e) = self.restore(true) {
                                         self.state.error = Some(e);
                                         self.state.recovery_pending = true;
@@ -343,7 +363,7 @@ impl Engine {
         }
     }
     fn apply(&mut self) -> Result<(), String> {
-        if !self.state.enabled || self.state.comparing {
+        if !self.state.enabled {
             return Ok(());
         }
         if self.state.gamma_recovery_pending {
@@ -362,7 +382,7 @@ impl Engine {
             self.state.enabled = false;
             self.state.comparing = false;
             let had_session = self.session.is_some();
-            return match self.restore_gamma(true) {
+            return match self.restore(true) {
                 Ok(()) if had_session => Err(format!("{error}. Original settings restored.")),
                 Ok(()) => Err(error),
                 Err(restore) => {
@@ -375,6 +395,10 @@ impl Engine {
     }
     fn apply_inner(&mut self) -> Result<(), String> {
         self.state.draft.validate()?;
+        let effective_tone = self
+            .state
+            .draft
+            .preview_tone(&self.state.config.current(), self.state.comparing);
         let index = self.index()?;
         if self.session.is_none() {
             let original = if self.displays[index].info.gamma_available {
@@ -393,9 +417,9 @@ impl Engine {
         }
         let mut baseline = self.session.clone().unwrap();
         let desired_gamma = if self.displays[index].info.gamma_available {
-            Some(tone::build(&baseline.ramp()?, &self.state.draft.tone))
+            Some(tone::build(&baseline.ramp()?, &effective_tone))
         } else {
-            if self.state.draft.tone != Tone::default() {
+            if effective_tone.gamma_only() != Tone::default() {
                 self.state.warnings.push("Gamma unavailable: HDR/advanced color, unknown color mode, or driver limitation".into());
             }
             None
@@ -415,17 +439,41 @@ impl Engine {
             self.store.log("Gamma apply: write verified");
             self.expected_gamma = desired_gamma;
         }
-        let id = self.displays[index].info.id.clone();
-        let store = &self.store;
-        if self.state.draft.hardware_enabled {
-            self.state.warnings.extend(self.hardware.apply(
-                &id,
-                &self.state.draft.hardware,
-                &mut self.displays[index],
-                |records| store.hardware_journal(records),
-            ));
-        }
+        // Monitor DDC/CI controls are intentionally retired from the product.
+        // Keep the recovery path below for records created by older builds, but
+        // never write new hardware values from a profile.
+        self.apply_saturation(effective_tone.saturation);
         Ok(())
+    }
+    fn apply_saturation(&mut self, value: f64) {
+        if value == 100.0 {
+            if let Err(error) = self.restore_saturation() {
+                self.state.saturation_error = Some(error);
+            }
+            return;
+        }
+        if self.state.saturation_error.is_some() {
+            return;
+        }
+        let result = if self.displays.iter().any(|d| d.info.hdr != Some(false)) {
+            Err("Saturation requires SDR on all displays".into())
+        } else {
+            self.saturation.apply(value)
+        };
+        if let Err(error) = result {
+            let restore = self.restore_saturation();
+            let message = match restore {
+                Ok(()) => error,
+                Err(e) => format!("{error}; restore: {e}"),
+            };
+            self.store.log(&format!("Saturation paused: {message}"));
+            self.state.saturation_error = Some(message);
+        }
+    }
+    fn restore_saturation(&mut self) -> Result<(), String> {
+        let result = self.saturation.restore();
+        self.state.color_recovery_pending = self.saturation.recovery_pending;
+        result
     }
     fn restore_record(&mut self, record: &Recovery) -> Result<(), String> {
         self.store.log(&format!(
@@ -495,9 +543,15 @@ impl Engine {
         }
     }
     fn restore(&mut self, clear: bool) -> Result<(), String> {
+        let color = self.restore_saturation();
         let gamma = self.restore_gamma(clear);
         self.restore_hardware(false);
-        gamma
+        let errors: Vec<_> = [color, gamma].into_iter().filter_map(Result::err).collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     }
     fn save_config(&mut self, config: Config) -> Result<(), String> {
         config.validate()?;
@@ -517,6 +571,11 @@ impl Engine {
     }
     fn handle(&mut self, operation: Operation) -> Result<(), String> {
         match operation {
+            Operation::RetrySaturation => {
+                self.restore_saturation()?;
+                self.state.saturation_error = None;
+                self.apply()?;
+            }
             Operation::CaptureShortcut(capturing) => {
                 if capturing && !self.capturing_shortcut {
                     self.app
@@ -541,6 +600,8 @@ impl Engine {
             }
             Operation::SetEnabled(enabled) => {
                 if !enabled {
+                    self.state.enabled = false;
+                    self.state.comparing = false;
                     self.restore(true)?;
                 }
                 self.state.enabled = enabled;
@@ -550,11 +611,8 @@ impl Engine {
                     return Err(e);
                 }
             }
-            Operation::Compare(original) => {
-                if original {
-                    self.restore(false)?;
-                }
-                self.state.comparing = original;
+            Operation::Compare(reference) => {
+                self.state.comparing = reference && self.state.enabled;
                 self.apply()?;
             }
             Operation::SelectPreset(id) => {
@@ -605,6 +663,7 @@ impl Engine {
             Operation::SavePreset(name) => {
                 let mut profile = self.state.draft.clone();
                 profile.name = name.trim().into();
+                profile.has_saved = true;
                 profile.shortcut = self.state.config.current().shortcut;
                 profile.validate()?;
                 let mut config = self.state.config.clone();
@@ -616,10 +675,13 @@ impl Engine {
                 self.save_config(config)?;
                 self.drafts.remove(&profile.id);
                 self.state.draft = profile;
+                self.state.comparing = false;
+                self.apply()?;
             }
             Operation::CreatePreset(name) => {
                 let mut profile = self.state.draft.clone();
                 profile.id = new_id();
+                profile.has_saved = false;
                 profile.name = name.trim().into();
                 profile.shortcut.clear();
                 profile.validate()?;
@@ -630,6 +692,8 @@ impl Engine {
                 self.drafts
                     .insert(self.state.draft.id.clone(), self.state.draft.clone());
                 self.state.draft = profile;
+                self.state.comparing = false;
+                self.apply()?;
             }
             Operation::DeletePreset(id) => {
                 let mut config = self.state.config.clone();
@@ -708,6 +772,7 @@ impl Engine {
             Operation::Recover => {
                 self.state.enabled = false;
                 self.state.comparing = false;
+                let color = self.restore_saturation();
                 // Refresh physical handles even when Windows reports the same
                 // topology (e.g. after monitor sleep or an input switch).
                 self.displays = native::enumerate();
@@ -721,7 +786,9 @@ impl Engine {
                     self.state.gamma_recovery_pending = false;
                 }
                 self.restore_hardware(true);
+                color?;
                 gamma?;
+                self.state.saturation_error = None;
             }
             Operation::Quit => {
                 let restored = if self.state.recovery_pending {

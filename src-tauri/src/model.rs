@@ -11,6 +11,7 @@ pub struct Tone {
     pub exposure: f64,
     pub temperature: f64,
     pub black_point: f64,
+    pub saturation: f64,
 }
 impl Default for Tone {
     fn default() -> Self {
@@ -22,12 +23,20 @@ impl Default for Tone {
             exposure: 0.0,
             temperature: 0.0,
             black_point: 0.0,
+            saturation: 100.0,
         }
     }
 }
 impl Tone {
+    pub fn gamma_only(&self) -> Self {
+        Self {
+            saturation: 100.0,
+            ..self.clone()
+        }
+    }
     pub fn validate(&self) -> Result<(), String> {
         for (name, value, min, max) in [
+            ("Saturation", self.saturation, 0.0, 200.0),
             ("Gamma", self.gamma, 0.6, 2.2),
             ("Shadows", self.shadows, 0.0, 60.0),
             ("Contrast", self.contrast, -40.0, 40.0),
@@ -67,11 +76,25 @@ pub struct Profile {
     pub hardware: BTreeMap<String, u32>,
     #[serde(default = "legacy_hardware_enabled")]
     pub hardware_enabled: bool,
+    #[serde(default = "legacy_saved")]
+    pub has_saved: bool,
 }
 fn legacy_hardware_enabled() -> bool {
     true
 }
+fn legacy_saved() -> bool {
+    true
+}
 impl Profile {
+    pub fn preview_tone(&self, saved: &Self, comparing: bool) -> Tone {
+        if !comparing {
+            self.tone.clone()
+        } else if saved.has_saved {
+            saved.tone.clone()
+        } else {
+            Tone::default()
+        }
+    }
     pub fn validate(&self) -> Result<(), String> {
         if self.id.is_empty()
             || self.id.len() > 100
@@ -144,6 +167,7 @@ impl Default for Config {
             tone: Tone::default(),
             hardware: BTreeMap::new(),
             hardware_enabled: false,
+            has_saved: false,
         };
         let mut game = desktop.clone();
         game.id = "tarkov".into();
@@ -231,6 +255,8 @@ pub struct Snapshot {
     pub recovery_pending: bool,
     pub gamma_recovery_pending: bool,
     pub hardware_recovery_pending: bool,
+    pub color_recovery_pending: bool,
+    pub saturation_error: Option<String>,
     pub reason: String,
 }
 
@@ -238,6 +264,7 @@ pub struct Snapshot {
 #[serde(tag = "type", content = "payload", rename_all = "camelCase")]
 pub enum Operation {
     Refresh,
+    RetrySaturation,
     SelectDisplay(String),
     SelectPreset(String),
     Preview(Profile),
@@ -256,6 +283,7 @@ pub enum Operation {
 impl Operation {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::RetrySaturation => "retrySaturation",
             Self::Refresh => "refresh",
             Self::SelectDisplay(_) => "selectDisplay",
             Self::SelectPreset(_) => "selectPreset",
@@ -278,6 +306,48 @@ impl Operation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn comparison_uses_saved_tone_without_mutating_draft() {
+        let mut saved = Config::default().current();
+        saved.tone.gamma = 1.2;
+        saved.tone.saturation = 120.0;
+        let mut draft = saved.clone();
+        draft.tone.gamma = 1.8;
+        draft.tone.saturation = 160.0;
+        assert_eq!(draft.preview_tone(&saved, true), Tone::default());
+        saved.has_saved = true;
+        assert_eq!(draft.preview_tone(&saved, true), saved.tone);
+        assert_eq!(draft.preview_tone(&saved, false), draft.tone);
+        draft.tone.shadows = 30.0;
+        assert_eq!(draft.preview_tone(&saved, true), saved.tone);
+        assert_eq!(draft.tone.gamma, 1.8);
+    }
+    #[test]
+    fn old_presets_default_to_neutral_saturation_and_invalid_imports_fail() {
+        let old: Tone = serde_json::from_str(r#"{"gamma":1.2}"#).unwrap();
+        assert_eq!(old.saturation, 100.0);
+        for value in [-1.0, 201.0, f64::NAN] {
+            assert!(Tone {
+                saturation: value,
+                ..Tone::default()
+            }
+            .validate()
+            .is_err());
+        }
+    }
+    #[test]
+    fn save_state_survives_roundtrip_and_legacy_presets_are_saved() {
+        let mut profile = Config::default().current();
+        for saved in [false, true] {
+            profile.has_saved = saved;
+            let value = serde_json::to_value(&profile).unwrap();
+            let loaded: Profile = serde_json::from_value(value).unwrap();
+            assert_eq!(loaded.has_saved, saved);
+        }
+        let mut legacy = serde_json::to_value(&profile).unwrap();
+        legacy.as_object_mut().unwrap().remove("hasSaved");
+        assert!(serde_json::from_value::<Profile>(legacy).unwrap().has_saved);
+    }
     #[test]
     fn retired_launch_options_load_but_are_not_exported() {
         let mut config = serde_json::to_value(Config::default()).unwrap();

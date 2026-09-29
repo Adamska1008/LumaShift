@@ -4,6 +4,7 @@ mod hardware;
 mod model;
 mod native;
 mod recovery;
+mod saturation;
 mod shortcuts;
 mod storage;
 mod tone;
