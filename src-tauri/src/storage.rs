@@ -201,6 +201,39 @@ mod tests {
         assert!(record.ramp().is_err());
     }
     #[test]
+    fn fresh_defaults_only_include_desktop_and_existing_presets_are_untouched() {
+        let dir = std::env::temp_dir().join(format!(
+            "lumashift-defaults-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = Storage::new(dir.clone()).unwrap();
+        let mut config = store.load().unwrap();
+        assert_eq!(config.presets.len(), 1);
+        assert_eq!(config.presets[0].id, "desktop");
+        assert_eq!(config.presets[0].shortcut, "F6");
+        let mut game = config.current();
+        game.id = "tarkov".into();
+        game.name = "My Tarkov".into();
+        game.shortcut = "F7".into();
+        game.tone.gamma = 1.37;
+        game.tone.saturation = 123.0;
+        config.active_preset = game.id.clone();
+        config.presets.push(game);
+        config.settings.theme = "dark".into();
+        store.save(&config).unwrap();
+        let before = std::fs::read(dir.join("config.json")).unwrap();
+        assert_eq!(
+            serde_json::to_value(store.load().unwrap()).unwrap(),
+            serde_json::to_value(&config).unwrap()
+        );
+        assert_eq!(std::fs::read(dir.join("config.json")).unwrap(), before);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn replaces_existing_config_and_round_trips() {
         let dir =
             std::env::temp_dir().join(format!("lumashift-storage-test-{}", std::process::id()));

@@ -16,7 +16,6 @@ export const neutralTone: Tone = { gamma: 1, shadows: 0, contrast: 0, highlights
 export function defaultConfig(): Config {
   return { version: 1, presets: [
     { id: 'desktop', name: '桌面', shortcut: 'F6', tone: { ...neutralTone }, hardware: {}, hasSaved: false, hardwareEnabled: false },
-    { id: 'tarkov', name: '塔科夫', shortcut: 'F7', tone: { ...neutralTone, gamma: 1.2, shadows: 25, contrast: 8 }, hardware: {}, hasSaved: false, hardwareEnabled: false },
   ], activePreset: 'desktop', selectedDisplay: 'preview-display', settings: { theme: 'system', language: 'zh', closeAction: 'tray', toggleShortcut: 'F9', cycleShortcut: 'F10' } };
 }
 export function curve(tone: Tone, x: number): number {

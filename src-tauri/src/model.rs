@@ -169,16 +169,9 @@ impl Default for Config {
             hardware_enabled: false,
             has_saved: false,
         };
-        let mut game = desktop.clone();
-        game.id = "tarkov".into();
-        game.name = "塔科夫".into();
-        game.shortcut = "F7".into();
-        game.tone.gamma = 1.2;
-        game.tone.shadows = 25.0;
-        game.tone.contrast = 8.0;
         Self {
             version: 1,
-            presets: vec![desktop, game],
+            presets: vec![desktop],
             active_preset: "desktop".into(),
             selected_display: None,
             settings: Settings::default(),
