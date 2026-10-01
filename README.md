@@ -70,7 +70,7 @@ npm.cmd test
 npm.cmd run test:rust
 ```
 
-本地构建产物：`.local/builds/LumaShift-0.1.1-<时间戳>.exe`。每次构建生成新文件，可避免旧实例占用 EXE 导致构建失败。请运行该目录中的产物，不要直接运行编译缓存目录中的 EXE。切换到新版前仍需从托盘退出旧实例。
+本地构建产物：`.local/builds/LumaShift-0.1.2-<时间戳>.exe`。每次构建生成新文件，可避免旧实例占用 EXE 导致构建失败。请运行该目录中的产物，不要直接运行编译缓存目录中的 EXE。切换到新版前仍需从托盘退出旧实例。
 
 ## 发布
 
@@ -78,11 +78,11 @@ npm.cmd run test:rust
 
 ```powershell
 git push origin main
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.1.2
+git push origin v0.1.2
 ```
 
-Release 附件为 `LumaShift-0.1.1-windows-x64.exe`。版本号由维护者指定，工作流不会自动修改；tag 与项目版本不一致时停止发布。
+Release 附件为 `LumaShift-0.1.2-windows-x64.exe`。版本号由维护者指定，工作流不会自动修改；tag 与项目版本不一致时停止发布。
 
 ## 配置与日志
 
