@@ -27,6 +27,7 @@ impl Recovery {
     }
 }
 
+#[derive(Clone)]
 pub struct Storage {
     pub root: PathBuf,
 }

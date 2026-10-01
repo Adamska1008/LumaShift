@@ -1,13 +1,13 @@
 use crate::{
+    gamma::{GammaSession, RecoveryError},
     hardware,
     model::*,
-    native, recovery, saturation,
+    native, saturation,
     shortcuts::{self, Action},
-    storage::{Recovery, Storage},
-    tone,
+    storage::Storage,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::HashMap,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -94,8 +94,7 @@ struct Engine {
     store: Storage,
     state: Snapshot,
     displays: Vec<native::Display>,
-    session: Option<Recovery>,
-    expected_gamma: Option<tone::Ramp>,
+    gamma: GammaSession<Storage>,
     hardware: hardware::Control,
     saturation: saturation::Control<saturation::WindowsTarget>,
     drafts: HashMap<String, Profile>,
@@ -160,6 +159,7 @@ pub fn start(app: &tauri::AppHandle) -> Result<Shared, String> {
     std::thread::Builder::new()
         .name("display-control".into())
         .spawn(move || {
+            let gamma = GammaSession::new(store.clone(), state.gamma_recovery_pending);
             let mut engine = Engine {
                 capturing_shortcut: false,
                 saturation: saturation::Control::new(
@@ -171,8 +171,7 @@ pub fn start(app: &tauri::AppHandle) -> Result<Shared, String> {
                 store,
                 state,
                 displays: vec![],
-                session: None,
-                expected_gamma: None,
+                gamma,
                 hardware,
                 drafts: HashMap::new(),
             };
@@ -202,6 +201,7 @@ impl Engine {
         for display in &mut self.state.displays {
             self.hardware.decorate(display);
         }
+        self.state.gamma_recovery_pending = self.gamma.pending();
         self.state.hardware_recovery_pending = self.hardware.pending();
         self.state.color_recovery_pending = self.saturation.recovery_pending;
         self.state.recovery_pending = self.state.gamma_recovery_pending
@@ -241,7 +241,7 @@ impl Engine {
                 match rx.recv_timeout(Duration::from_secs(4)) {
                     Ok(item) => item,
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        let _ = self.restore(true);
+                        let _ = self.restore();
                         break;
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -251,7 +251,7 @@ impl Engine {
                             self.state.busy = true;
                             self.publish("busy");
                             self.displays = native::enumerate();
-                            if let Err(e) = self.restore(true) {
+                            if let Err(e) = self.restore() {
                                 self.state.error = Some(e);
                                 self.state.recovery_pending = true;
                             }
@@ -273,16 +273,11 @@ impl Engine {
                                     self.publish("saturation-paused");
                                 }
                             }
-                            if let (Some(expected), Ok(index)) =
-                                (self.expected_gamma.as_ref(), self.index())
-                            {
-                                if self.displays[index]
-                                    .read_gamma()
-                                    .is_ok_and(|actual| !tone::matches(expected, &actual))
-                                {
+                            if let Ok(index) = self.index() {
+                                if self.gamma.interrupted(&mut self.displays[index]) {
                                     self.state.enabled = false;
                                     self.state.comparing = false;
-                                    if let Err(e) = self.restore(true) {
+                                    if let Err(e) = self.restore() {
                                         self.state.error = Some(e);
                                         self.state.recovery_pending = true;
                                     }
@@ -366,23 +361,17 @@ impl Engine {
         if !self.state.enabled {
             return Ok(());
         }
-        if self.state.gamma_recovery_pending {
-            // A user activation may restore the previous Gamma independently
-            // of any pending DDC originals. Never capture a modified baseline.
-            let record = self
-                .store
-                .recovery()?
-                .ok_or("Gamma recovery record missing")?;
-            self.restore_record(&record)?;
-            self.session = None;
-            self.expected_gamma = None;
-            self.state.gamma_recovery_pending = false;
+        let prepared = self.gamma.prepare(&mut self.displays);
+        if prepared.is_err() && self.gamma.pending() {
+            self.state.enabled = false;
+            self.state.comparing = false;
         }
+        prepared?;
         if let Err(error) = self.apply_inner() {
             self.state.enabled = false;
             self.state.comparing = false;
-            let had_session = self.session.is_some();
-            return match self.restore(true) {
+            let had_session = self.gamma.active();
+            return match self.restore() {
                 Ok(()) if had_session => Err(format!("{error}. Original settings restored.")),
                 Ok(()) => Err(error),
                 Err(restore) => {
@@ -400,45 +389,12 @@ impl Engine {
             .draft
             .preview_tone(&self.state.config.current(), self.state.comparing);
         let index = self.index()?;
-        if self.session.is_none() {
-            let original = if self.displays[index].info.gamma_available {
-                self.displays[index].read_gamma()?
-            } else {
-                tone::identity()
-            };
-            self.session = Some(Recovery {
-                version: 1,
-                display_id: self.displays[index].info.id.clone(),
-                device: self.displays[index].info.device.clone(),
-                gamma: original.into_iter().flatten().collect(),
-                gamma_changed: false,
-                hardware: BTreeMap::new(),
-            });
+        if !self.displays[index].info.gamma_available
+            && effective_tone.gamma_only() != Tone::default()
+        {
+            self.state.warnings.push("Gamma unavailable: HDR/advanced color, unknown color mode, or driver limitation".into());
         }
-        let mut baseline = self.session.clone().unwrap();
-        let desired_gamma = if self.displays[index].info.gamma_available {
-            Some(tone::build(&baseline.ramp()?, &effective_tone))
-        } else {
-            if effective_tone.gamma_only() != Tone::default() {
-                self.state.warnings.push("Gamma unavailable: HDR/advanced color, unknown color mode, or driver limitation".into());
-            }
-            None
-        };
-        let original_ramp = baseline.ramp()?;
-        let gamma_dirty = desired_gamma
-            .as_ref()
-            .is_some_and(|r| self.expected_gamma.as_ref().unwrap_or(&original_ramp) != r);
-        if gamma_dirty {
-            baseline.gamma_changed = true;
-        }
-        self.store.journal(&baseline)?; // Persist originals BEFORE any write can occur.
-        self.session = Some(baseline);
-        if gamma_dirty {
-            self.store.log("Gamma apply: write begin");
-            self.displays[index].write_gamma(desired_gamma.as_ref().unwrap())?;
-            self.store.log("Gamma apply: write verified");
-            self.expected_gamma = desired_gamma;
-        }
+        self.gamma.apply(&mut self.displays[index], &effective_tone)?;
         // Monitor DDC/CI controls are intentionally retired from the product.
         // Keep the recovery path below for records created by older builds, but
         // never write new hardware values from a profile.
@@ -475,60 +431,6 @@ impl Engine {
         self.state.color_recovery_pending = self.saturation.recovery_pending;
         result
     }
-    fn restore_record(&mut self, record: &Recovery) -> Result<(), String> {
-        self.store.log(&format!(
-            "Gamma recovery begin; gamma_changed={}",
-            record.gamma_changed
-        ));
-        let target = self
-            .displays
-            .iter_mut()
-            .find(|d| d.info.id == record.display_id);
-        let (remaining, mut errors) = recovery::remaining(record, target);
-        self.store
-            .log(&format!("Gamma recovery result: {errors:?}"));
-        if errors.is_empty() {
-            match self.store.clear_recovery() {
-                Ok(()) => return Ok(()),
-                Err(error) => errors.push(format!("Could not clear recovery record: {error}")),
-            }
-        }
-        // Keep only verified outstanding work. If persisting progress fails,
-        // retain the conservative full record both on disk and in memory.
-        self.session = Some(match self.store.journal(&remaining) {
-            Ok(()) => remaining,
-            Err(error) => {
-                errors.push(format!("Could not save recovery progress: {error}"));
-                record.clone()
-            }
-        });
-        self.pause_for_recovery();
-        Err(errors.join("; "))
-    }
-    fn pause_for_recovery(&mut self) {
-        self.state.enabled = false;
-        self.state.comparing = false;
-        self.state.gamma_recovery_pending = true;
-        self.expected_gamma = None;
-    }
-    fn restore_gamma(&mut self, clear: bool) -> Result<(), String> {
-        let record = if self.session.is_some() {
-            self.session.clone()
-        } else if self.state.gamma_recovery_pending {
-            self.store.recovery()?
-        } else {
-            None
-        };
-        if let Some(record) = record {
-            self.restore_record(&record)?;
-            self.expected_gamma = None;
-            if clear {
-                self.session = None;
-                self.state.gamma_recovery_pending = false;
-            }
-        }
-        Ok(())
-    }
     fn restore_hardware(&mut self, retry_blocked: bool) {
         let ids: Vec<_> = self.hardware.records.displays.keys().cloned().collect();
         for id in ids {
@@ -542,9 +444,13 @@ impl Engine {
             ));
         }
     }
-    fn restore(&mut self, clear: bool) -> Result<(), String> {
+    fn restore(&mut self) -> Result<(), String> {
         let color = self.restore_saturation();
-        let gamma = self.restore_gamma(clear);
+        let gamma = self.gamma.restore(&mut self.displays);
+        if gamma.is_err() && self.gamma.pending() {
+            self.state.enabled = false;
+            self.state.comparing = false;
+        }
         self.restore_hardware(false);
         let errors: Vec<_> = [color, gamma].into_iter().filter_map(Result::err).collect();
         if errors.is_empty() {
@@ -602,7 +508,7 @@ impl Engine {
                 if !enabled {
                     self.state.enabled = false;
                     self.state.comparing = false;
-                    self.restore(true)?;
+                    self.restore()?;
                 }
                 self.state.enabled = enabled;
                 self.state.comparing = false;
@@ -645,14 +551,14 @@ impl Engine {
                 if !self.displays.iter().any(|d| d.info.id == id) {
                     return Err("Display not found".into());
                 }
-                self.restore(true)?;
+                self.restore()?;
                 self.state.enabled = false;
                 self.state.comparing = false;
                 self.state.config.selected_display = Some(id);
                 self.store.save(&self.state.config)?;
             }
             Operation::Refresh => {
-                self.restore(true)?;
+                self.restore()?;
                 self.state.enabled = false;
                 self.state.comparing = false;
                 self.displays = native::enumerate();
@@ -701,7 +607,7 @@ impl Engine {
                     return Err("Keep at least one preset".into());
                 }
                 if id == config.active_preset {
-                    self.restore(true)?;
+                    self.restore()?;
                     self.state.enabled = false;
                 }
                 config.presets.retain(|p| p.id != id);
@@ -759,7 +665,7 @@ impl Engine {
                 };
                 config.validate()?;
                 shortcuts::bindings(&config)?;
-                self.restore(true)?;
+                self.restore()?;
                 self.state.enabled = false;
                 self.state.comparing = false;
                 if !self
@@ -780,15 +686,11 @@ impl Engine {
                 // Refresh physical handles even when Windows reports the same
                 // topology (e.g. after monitor sleep or an input switch).
                 self.displays = native::enumerate();
-                let gamma = match self.session.clone().or(self.store.recovery()?) {
-                    Some(record) => self.restore_record(&record),
-                    None => Ok(()),
+                let gamma = match self.gamma.recover(&mut self.displays) {
+                    Err(RecoveryError::Read(error)) => return Err(error),
+                    Err(RecoveryError::Restore(error)) => Err(error),
+                    Ok(()) => Ok(()),
                 };
-                if gamma.is_ok() {
-                    self.session = None;
-                    self.expected_gamma = None;
-                    self.state.gamma_recovery_pending = false;
-                }
                 self.restore_hardware(true);
                 color?;
                 gamma?;
@@ -798,7 +700,7 @@ impl Engine {
                 let restored = if self.state.recovery_pending {
                     self.handle(Operation::Recover)
                 } else {
-                    self.restore(true)
+                    self.restore()
                 };
                 if let Err(e) = restored {
                     self.state.recovery_pending = true;

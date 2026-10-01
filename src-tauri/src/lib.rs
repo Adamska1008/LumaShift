@@ -1,5 +1,6 @@
 mod ddc;
 mod engine;
+mod gamma;
 mod hardware;
 mod model;
 mod native;
