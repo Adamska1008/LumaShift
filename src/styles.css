@@ -241,8 +241,10 @@ input.range-value { width: 52px; flex: 0 0 52px; padding: 6px 3px !important; te
 .main-adjust .preset-heading { flex-wrap: nowrap; overflow: hidden; }
 .main-adjust .preset-heading h1 { font-size: clamp(21px, 2.2vw, 27px); white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
 .main-adjust .save-status { flex-shrink: 0; }
+.preset-shortcut { flex-shrink: 0; min-width: 0; }
+.preset-shortcut .shortcut-field { min-width: 0; max-width: 160px; padding: 5px 8px; font-size: 12px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .main-adjust > .control-grid { flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr); gap: clamp(12px, 1.5vw, 20px); align-items: stretch; }
-.main-adjust .panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.main-adjust .panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: transparent; border-color: transparent; border-radius: 0; }
 .main-adjust .panel-heading { flex-shrink: 0; padding: 16px 20px 12px; align-items: center; }
 .main-adjust .panel-heading p { margin-top: 4px; }
 .panel-body { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
@@ -250,6 +252,7 @@ input.range-value { width: 52px; flex: 0 0 52px; padding: 6px 3px !important; te
 .gamma-body > * { flex-shrink: 0; }
 .main-adjust .curve-wrap { margin: 0 20px 12px; }
 .main-adjust .curve-wrap svg { height: clamp(72px, calc(30vh - 120px), 155px); display: block; }
+.main-adjust .gamma-body:not(.advanced-open) .curve-wrap svg { height: clamp(99px, calc(41.25vh - 165px), 213px); }
 .main-adjust .tone-sliders, .main-adjust .advanced-controls { padding-left: 20px; padding-right: 20px; }
 .main-adjust .tone-sliders { margin-top: auto; margin-bottom: auto; }
 .main-adjust .tone-row { min-height: clamp(38px, 6vh, 50px); }

@@ -28,7 +28,19 @@ if (-not $visualStudioPath) {
 }
 switch ($Action) {
   'dev' { & npm.cmd run tauri -- dev }
-  'build' { & npm.cmd run tauri -- build --no-bundle }
+  'build' {
+    # Keep compiler output separate from executables users launch.
+    $env:CARGO_TARGET_DIR = Join-Path $projectRoot 'src-tauri\target\desktop-build'
+    & npm.cmd run tauri -- build --no-bundle
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $version = (Get-Content -LiteralPath (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json).version
+    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+    $outputDirectory = Join-Path $projectRoot '.local\builds'
+    New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
+    $outputPath = Join-Path $outputDirectory "LumaShift-$version-$timestamp.exe"
+    Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release\lumashift.exe') -Destination $outputPath -ErrorAction Stop
+    Write-Host "Built executable: $outputPath"
+  }
   'test' { & cargo test --manifest-path src-tauri/Cargo.toml }
   'check' { & cargo check --manifest-path src-tauri/Cargo.toml }
   'diagnose' { & cargo run --manifest-path src-tauri/Cargo.toml -- --diagnose }

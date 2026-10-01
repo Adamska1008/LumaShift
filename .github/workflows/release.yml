@@ -73,7 +73,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           New-Item -ItemType Directory -Path release -Force | Out-Null
-          Copy-Item -LiteralPath src-tauri/target/release/lumashift.exe -Destination "release/LumaShift-$env:RELEASE_VERSION-windows-x64.exe"
+          Copy-Item -LiteralPath src-tauri/target/desktop-build/release/lumashift.exe -Destination "release/LumaShift-$env:RELEASE_VERSION-windows-x64.exe"
           Copy-Item -LiteralPath LICENSE -Destination release/LICENSE
 
       - uses: actions/upload-artifact@v7
