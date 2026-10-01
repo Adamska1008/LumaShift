@@ -63,6 +63,9 @@ npm.cmd run desktop:build
 # 前端类型检查与构建
 npm.cmd run build
 
+# 前端交互行为测试
+npm.cmd test
+
 # Rust 单元测试
 npm.cmd run test:rust
 ```

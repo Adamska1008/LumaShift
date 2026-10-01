@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Monitor, Crosshair, Keyboard, Settings as SettingsIcon, ArrowLeft, Plus, Sun, Moon, Laptop, Contrast, Palette, RotateCcw, Undo2, ChevronRight, Check, X, Minus, Square, Pencil, Download, Upload, RefreshCw, FolderOpen, Copy, Power, Trash2, SlidersHorizontal, AlertTriangle, LoaderCircle, Eye, Info } from 'lucide-react';
 import * as api from './bridge';
-import { reportUi, describeError } from './diagnostics';
+import { useAdjustmentSession } from './useAdjustmentSession';
 import { version as appVersion } from '../package.json';
-import { curve, neutralTone, shortcutFromEvent, shortcutText, type Config, type Operation, type Profile, type Settings, type Snapshot, type Tone } from './types';
+import { curve, neutralTone, shortcutFromEvent, shortcutText, type Settings, type Tone } from './types';
 
 type Page = 'adjust' | 'shortcuts' | 'settings';
 type Modal = { type: 'create' | 'rename' | 'delete'; value: string } | { type: 'import'; value: string; json: string } | null;
@@ -51,46 +51,13 @@ function ShortcutField({ value, label, onChange, onError, compact = false, empty
 }
 
 export default function App() {
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  const [draft, setDraft] = useState<Profile | null>(null);
   const [page, setPage] = useState<Page>('adjust');
   const [advanced, setAdvanced] = useState(false);
-  const [modal, setModal] = useState<Modal>(null); const [notice, setNotice] = useState(''); const [bootError, setBootError] = useState('');
+  const [modal, setModal] = useState<Modal>(null); const [notice, setNotice] = useState('');
+  const { snapshot, draft, bootError, edit, act } = useAdjustmentSession(setNotice);
   const [systemDark, setSystemDark] = useState(window.matchMedia('(prefers-color-scheme: dark)').matches);
-  const latest = useRef<Snapshot | null>(null); const currentDraft = useRef<Profile | null>(null);
-  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const pendingPreview = useRef<Profile | null>(null);
-  const previewInFlight = useRef<Promise<void>>(Promise.resolve());
-  const actionQueue = useRef<Promise<unknown>>(Promise.resolve()); const fileInput = useRef<HTMLInputElement>(null); const importScope = useRef('presets');
+  const fileInput = useRef<HTMLInputElement>(null); const importScope = useRef('presets');
   const en = snapshot?.config.settings.language === 'en'; const t = (zh: string, english: string) => en ? english : zh;
-  const applySnapshot = useCallback((s: Snapshot) => {
-    if (latest.current && s.revision < latest.current.revision) return;
-    latest.current = s; setSnapshot(s);
-    if (!currentDraft.current || ['ready', 'profile', 'saved'].includes(s.reason)) {
-      const next = structuredClone(s.draft); currentDraft.current = next; setDraft(next);
-      if (s.reason === 'profile') { pendingPreview.current = null; if (previewTimer.current) clearTimeout(previewTimer.current); previewTimer.current = null; }
-    } else if (currentDraft.current.id === s.draft.id && currentDraft.current.shortcut !== s.draft.shortcut) {
-      const next = { ...currentDraft.current, shortcut: s.draft.shortcut }; currentDraft.current = next; setDraft(next);
-    }
-  }, []);
-  useEffect(() => {
-    let active = true; let unsubscribe: (() => void) | undefined;
-    void (async () => {
-      reportUi('startup: subscribing to backend state');
-      const cleanup = await api.subscribe(s => { if (active) applySnapshot(s); });
-      if (!active) { cleanup(); return; } unsubscribe = cleanup;
-      reportUi('startup: requesting initial state');
-      const state = await api.getState(); if (active) applySnapshot(state);
-      if (active) reportUi(`startup: state received, revision=${state.revision}, reason=${state.reason}`);
-    })().catch(error => { reportUi(`startup failed: ${describeError(error)}`); if (active) setBootError(String(error)); });
-    return () => { active = false; unsubscribe?.(); };
-  }, [applySnapshot]);
-  const reportedReady = useRef(false);
-  useEffect(() => {
-    if (snapshot && draft && !snapshot.busy && !reportedReady.current) {
-      reportedReady.current = true;
-      reportUi(`interface mounted; displays=${snapshot.displays.length}, preset=${draft.id}`);
-    }
-  }, [snapshot, draft]);
   useEffect(() => { const mq = window.matchMedia('(prefers-color-scheme: dark)'); const change = () => setSystemDark(mq.matches); mq.addEventListener('change', change); return () => mq.removeEventListener('change', change); }, []);
   useEffect(() => {
     const theme = snapshot?.config.settings.theme ?? 'system';
@@ -98,39 +65,8 @@ export default function App() {
     document.documentElement.lang = en ? 'en' : 'zh-CN';
   }, [snapshot?.config.settings.theme, systemDark, en]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6500); return () => clearTimeout(timer); }, [notice]);
-  const flushPreview = useCallback(async () => {
-    if (previewTimer.current) clearTimeout(previewTimer.current); previewTimer.current = null;
-    const profile = pendingPreview.current; pendingPreview.current = null;
-    if (profile) previewInFlight.current = previewInFlight.current.catch(() => {}).then(async () => { applySnapshot(await api.command({ type: 'preview', payload: profile })); });
-    await previewInFlight.current;
-  }, [applySnapshot]);
-  const act = useCallback((operation: Operation | ((s: Snapshot) => Operation)) => {
-    actionQueue.current = actionQueue.current.catch(() => {}).then(async () => {
-      await flushPreview();
-      if (!latest.current) return;
-      const result = await api.command(typeof operation === 'function' ? operation(latest.current) : operation);
-      applySnapshot(result);
-    }).catch(error => setNotice(String(error)));
-    return actionQueue.current;
-  }, [applySnapshot, flushPreview]);
-  const edit = (next: Profile) => {
-    currentDraft.current = next; setDraft(next); pendingPreview.current = next;
-    if (!previewTimer.current) previewTimer.current = setTimeout(() => { void flushPreview().catch(error => setNotice(String(error))); }, 90);
-  };
   const updateSettings = (change: Partial<Settings>) => act(s => ({ type: 'saveConfig', payload: { ...s.config, settings: { ...s.config.settings, ...change } } }));
   const setShortcut = (id: string, shortcut: string) => act(s => ({ type: 'saveConfig', payload: { ...s.config, presets: s.config.presets.map(p => p.id === id ? { ...p, shortcut } : p) } }));
-  useEffect(() => {
-    if (api.desktop) return;
-    const listener = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement)?.closest('input,textarea,.shortcut-field') || event.repeat || !latest.current) return;
-      let shortcut: string | null; try { shortcut = shortcutFromEvent(event); } catch { return; }
-      const config = latest.current.config; const preset = config.presets.find(p => p.shortcut && p.shortcut === shortcut);
-      if (preset) { event.preventDefault(); void act({ type: 'selectPreset', payload: preset.id }); }
-      else if (shortcut === config.settings.toggleShortcut) { event.preventDefault(); void act(s => ({ type: 'setEnabled', payload: !s.enabled })); }
-      else if (shortcut === config.settings.cycleShortcut) { event.preventDefault(); void act(s => ({ type: 'selectPreset', payload: s.config.presets[(s.config.presets.findIndex(p => p.id === s.config.activePreset) + 1) % s.config.presets.length].id })); }
-    };
-    window.addEventListener('keydown', listener); return () => window.removeEventListener('keydown', listener);
-  }, [act]);
 
   const device = snapshot?.displays.find(d => d.id === snapshot.config.selectedDisplay);
   const saved = snapshot?.config.presets.find(p => p.id === draft?.id);
