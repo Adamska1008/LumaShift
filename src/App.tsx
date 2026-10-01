@@ -65,8 +65,8 @@ export default function App() {
     document.documentElement.lang = en ? 'en' : 'zh-CN';
   }, [snapshot?.config.settings.theme, systemDark, en]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6500); return () => clearTimeout(timer); }, [notice]);
-  const updateSettings = (change: Partial<Settings>) => act(s => ({ type: 'saveConfig', payload: { ...s.config, settings: { ...s.config.settings, ...change } } }));
-  const setShortcut = (id: string, shortcut: string) => act(s => ({ type: 'saveConfig', payload: { ...s.config, presets: s.config.presets.map(p => p.id === id ? { ...p, shortcut } : p) } }));
+  const updateSettings = (change: Partial<Settings>) => act({ type: 'updateSettings', payload: change });
+  const setShortcut = (presetId: string, shortcut: string) => act({ type: 'setPresetShortcut', payload: { presetId, shortcut } });
 
   const device = snapshot?.displays.find(d => d.id === snapshot.config.selectedDisplay);
   const saved = snapshot?.config.presets.find(p => p.id === draft?.id);

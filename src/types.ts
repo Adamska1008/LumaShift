@@ -10,7 +10,8 @@ export type Operation =
   | { type: 'selectDisplay' | 'selectPreset' | 'savePreset' | 'createPreset' | 'deletePreset'; payload: string }
   | { type: 'preview'; payload: Profile }
   | { type: 'setEnabled' | 'compare' | 'captureShortcut'; payload: boolean }
-  | { type: 'saveConfig'; payload: Config }
+  | { type: 'setPresetShortcut'; payload: { presetId: string; shortcut: string } }
+  | { type: 'updateSettings'; payload: Partial<Settings> }
   | { type: 'import'; payload: { json: string; scope: string } };
 export const neutralTone: Tone = { gamma: 1, shadows: 0, contrast: 0, highlights: 0, exposure: 0, temperature: 0, blackPoint: 0, saturation: 100 };
 export function defaultConfig(): Config {

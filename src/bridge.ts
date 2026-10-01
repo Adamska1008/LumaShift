@@ -75,7 +75,14 @@ export async function command(operation: Operation): Promise<Snapshot> {
         s.config.presets = s.config.presets.filter(p => p.id !== operation.payload);
         if (s.config.activePreset === operation.payload) { s.config.activePreset = s.config.presets[0].id; s.draft = structuredClone(s.config.presets[0]); s.enabled = false; }
         s.reason = 'profile'; break;
-      case 'saveConfig': validatePreview(operation.payload); s.config = structuredClone(operation.payload); s.draft.shortcut = s.config.presets.find(p => p.id === s.draft.id)?.shortcut ?? ''; break;
+      case 'setPresetShortcut': {
+        const preset = s.config.presets.find(p => p.id === operation.payload.presetId);
+        if (!preset) throw new Error('Preset not found');
+        preset.shortcut = operation.payload.shortcut;
+        s.draft.shortcut = s.config.presets.find(p => p.id === s.draft.id)?.shortcut ?? '';
+        break;
+      }
+      case 'updateSettings': s.config.settings = { ...s.config.settings, ...operation.payload }; break;
       case 'import': {
         const parsed = JSON.parse(operation.payload.json);
         if (operation.payload.scope === 'all') { validatePreview(parsed); s.config = parsed; s.draft = structuredClone(s.config.presets.find(p => p.id === s.config.activePreset) ?? s.config.presets[0]); }

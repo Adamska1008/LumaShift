@@ -47,10 +47,14 @@ async function execute(operation: Operation): Promise<Snapshot> {
       if (!selected) throw new Error('Preset not found');
       state.config.activePreset = selected.id; state.draft = structuredClone(selected); state.reason = 'profile'; break;
     }
-    case 'saveConfig':
-      state.config = structuredClone(operation.payload);
+    case 'setPresetShortcut': {
+      const preset = state.config.presets.find(p => p.id === operation.payload.presetId);
+      if (!preset) throw new Error('Preset not found');
+      preset.shortcut = operation.payload.shortcut;
       state.draft.shortcut = state.config.presets.find(p => p.id === state.draft.id)?.shortcut ?? '';
       break;
+    }
+    case 'updateSettings': state.config.settings = { ...state.config.settings, ...operation.payload }; break;
     case 'setEnabled': state.enabled = operation.payload; break;
   }
   const result = structuredClone(state);
@@ -103,6 +107,22 @@ describe('adjustment session through the app', () => {
     expect(gamma().getAttribute('value')).toBe('1.5');
     expect(state.config.presets[0].tone.gamma).toBe(1);
     expect(state.config.presets[0].shortcut).toBe('F8');
+    expect(operations.find(o => o.type === 'setPresetShortcut')).toEqual({
+      type: 'setPresetShortcut', payload: { presetId: 'desktop', shortcut: 'F8' },
+    });
+    expect(screen.getByText('Unsaved changes').textContent).toBe('Unsaved changes');
+  });
+
+  it('updates a preference without sending a full configuration', async () => {
+    await start(); changeGamma('1.4');
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'When closing the window' }), { target: { value: 'quit' } });
+    await settle();
+    expect(state.config.settings.closeAction).toBe('quit');
+    expect(state.config.presets[0].tone.gamma).toBe(1);
+    expect(operations.find(o => o.type === 'updateSettings')).toEqual({ type: 'updateSettings', payload: { closeAction: 'quit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Back to picture' }));
+    expect(gamma().getAttribute('value')).toBe('1.4');
     expect(screen.getByText('Unsaved changes').textContent).toBe('Unsaved changes');
   });
 

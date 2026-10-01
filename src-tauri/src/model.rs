@@ -149,6 +149,23 @@ impl Default for Settings {
     }
 }
 
+#[derive(Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SettingsPatch {
+    pub theme: Option<String>,
+    pub language: Option<String>,
+    pub close_action: Option<CloseAction>,
+    pub toggle_shortcut: Option<String>,
+    pub cycle_shortcut: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PresetShortcut {
+    pub preset_id: String,
+    pub shortcut: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
@@ -179,6 +196,32 @@ impl Default for Config {
     }
 }
 impl Config {
+    pub fn set_preset_shortcut(&mut self, change: PresetShortcut) -> Result<(), String> {
+        let preset = self
+            .presets
+            .iter_mut()
+            .find(|preset| preset.id == change.preset_id)
+            .ok_or("Preset not found")?;
+        preset.shortcut = change.shortcut;
+        Ok(())
+    }
+    pub fn update_settings(&mut self, patch: SettingsPatch) {
+        if let Some(theme) = patch.theme {
+            self.settings.theme = theme;
+        }
+        if let Some(language) = patch.language {
+            self.settings.language = language;
+        }
+        if let Some(close_action) = patch.close_action {
+            self.settings.close_action = close_action;
+        }
+        if let Some(toggle_shortcut) = patch.toggle_shortcut {
+            self.settings.toggle_shortcut = toggle_shortcut;
+        }
+        if let Some(cycle_shortcut) = patch.cycle_shortcut {
+            self.settings.cycle_shortcut = cycle_shortcut;
+        }
+    }
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
             return Err("Unsupported configuration version".into());
@@ -267,7 +310,8 @@ pub enum Operation {
     SavePreset(String),
     CreatePreset(String),
     DeletePreset(String),
-    SaveConfig(Config),
+    SetPresetShortcut(PresetShortcut),
+    UpdateSettings(SettingsPatch),
     Import { json: String, scope: String },
     Recover,
     Quit,
@@ -287,7 +331,8 @@ impl Operation {
             Self::SavePreset(_) => "savePreset",
             Self::CreatePreset(_) => "createPreset",
             Self::DeletePreset(_) => "deletePreset",
-            Self::SaveConfig(_) => "saveConfig",
+            Self::SetPresetShortcut(_) => "setPresetShortcut",
+            Self::UpdateSettings(_) => "updateSettings",
             Self::Import { .. } => "import",
             Self::Recover => "recover",
             Self::Quit => "quit",
@@ -299,6 +344,112 @@ impl Operation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preference_patches_preserve_latest_selection_presets_and_other_settings() {
+        let mut config = Config::default();
+        let mut game = config.current();
+        game.id = "game".into();
+        game.name = "Game".into();
+        game.tone.gamma = 1.6;
+        config.presets.push(game);
+        config.active_preset = "game".into();
+        config.selected_display = Some("display-B".into());
+        config.settings.theme = "light".into();
+        let mut expected = serde_json::to_value(&config).unwrap();
+        expected["settings"]["closeAction"] = serde_json::json!("quit");
+        config.update_settings(SettingsPatch {
+            close_action: Some(CloseAction::Quit),
+            ..Default::default()
+        });
+        assert_eq!(serde_json::to_value(&config).unwrap(), expected);
+    }
+    #[test]
+    fn shortcut_updates_only_change_the_named_preset_and_allow_clearing() {
+        let mut config = Config::default();
+        config.settings.language = "en".into();
+        config.selected_display = Some("display-B".into());
+        let mut expected = serde_json::to_value(&config).unwrap();
+        expected["presets"][0]["shortcut"] = serde_json::json!("F8");
+        config
+            .set_preset_shortcut(PresetShortcut {
+                preset_id: "desktop".into(),
+                shortcut: "F8".into(),
+            })
+            .unwrap();
+        assert_eq!(serde_json::to_value(&config).unwrap(), expected);
+        let before = serde_json::to_value(&config).unwrap();
+        assert_eq!(
+            config.set_preset_shortcut(PresetShortcut {
+                preset_id: "missing".into(),
+                shortcut: "F7".into()
+            }),
+            Err("Preset not found".into())
+        );
+        assert_eq!(serde_json::to_value(&config).unwrap(), before);
+        config
+            .set_preset_shortcut(PresetShortcut {
+                preset_id: "desktop".into(),
+                shortcut: String::new(),
+            })
+            .unwrap();
+        assert_eq!(config.current().shortcut, "");
+    }
+    #[test]
+    fn parses_narrow_commands_and_rejects_full_config_and_unknown_patch_fields() {
+        let operation: Operation = serde_json::from_str(
+            r#"{"type":"setPresetShortcut","payload":{"presetId":"desktop","shortcut":"F8"}}"#,
+        )
+        .unwrap();
+        let mut config = Config::default();
+        if let Operation::SetPresetShortcut(change) = operation {
+            config.set_preset_shortcut(change).unwrap();
+        } else {
+            panic!("Expected shortcut command");
+        }
+        assert_eq!(config.current().shortcut, "F8");
+        let operation: Operation = serde_json::from_str(r#"{"type":"updateSettings","payload":{"theme":"light","language":"en","closeAction":"quit","toggleShortcut":"","cycleShortcut":"F7"}}"#).unwrap();
+        if let Operation::UpdateSettings(patch) = operation {
+            config.update_settings(patch);
+        } else {
+            panic!("Expected settings command");
+        }
+        assert_eq!(
+            serde_json::to_value(&config.settings).unwrap(),
+            serde_json::json!({"theme":"light","language":"en","closeAction":"quit","toggleShortcut":"","cycleShortcut":"F7"})
+        );
+        for json in [
+            r#"{"type":"updateSettings","payload":{"activePreset":"other"}}"#,
+            r#"{"type":"updateSettings","payload":{"closeAction":"invalid"}}"#,
+            r#"{"type":"setPresetShortcut","payload":{"presetId":"desktop","shortcut":"F8","presets":[]}}"#,
+            r#"{"type":"saveConfig","payload":{}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Operation>(json).is_err(),
+                "Accepted {json}"
+            );
+        }
+    }
+    #[test]
+    fn patched_configs_still_pass_through_preference_and_shortcut_validation() {
+        let mut config = Config::default();
+        config.update_settings(SettingsPatch {
+            theme: Some("invalid".into()),
+            ..Default::default()
+        });
+        assert_eq!(config.validate(), Err("Invalid appearance settings".into()));
+        config.update_settings(SettingsPatch {
+            theme: Some("light".into()),
+            toggle_shortcut: Some("F6".into()),
+            ..Default::default()
+        });
+        assert!(config.validate().is_ok());
+        assert!(crate::shortcuts::bindings(&config).is_err());
+        config.update_settings(SettingsPatch {
+            toggle_shortcut: Some("F8".into()),
+            ..Default::default()
+        });
+        assert!(crate::shortcuts::bindings(&config).is_ok());
+    }
     #[test]
     fn comparison_uses_saved_tone_without_mutating_draft() {
         let mut saved = Config::default().current();

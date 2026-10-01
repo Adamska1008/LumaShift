@@ -720,12 +720,16 @@ impl Engine {
                     self.state.comparing = false;
                 }
             }
-            Operation::SaveConfig(mut config) => {
-                // Settings/shortcut edits cannot silently switch the actual display or preset.
-                config.active_preset = self.state.config.active_preset.clone();
-                config.selected_display = self.state.config.selected_display.clone();
+            Operation::SetPresetShortcut(change) => {
+                let mut config = self.state.config.clone();
+                config.set_preset_shortcut(change)?;
                 self.save_config(config)?;
                 self.state.draft.shortcut = self.state.config.current().shortcut;
+            }
+            Operation::UpdateSettings(patch) => {
+                let mut config = self.state.config.clone();
+                config.update_settings(patch);
+                self.save_config(config)?;
             }
             Operation::Import { json, scope } => {
                 if json.len() > 1_000_000 {
